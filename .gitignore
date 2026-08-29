@@ -4,3 +4,4 @@ raftkv
 *.out
 coverage.*
 .DS_Store
+.env*
