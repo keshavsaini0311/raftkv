@@ -9,8 +9,8 @@ Run everything: `go test ./learn/...`
 | # | Package | Topic | Status |
 |---|---------|-------|--------|
 | 1 | `basics/` | Packages, exports, zero values | done |
-| 2 | `enums/` | Named types, constants, iota, `String()` | in progress |
-| 3 | | Structs & pointer vs value receivers | |
+| 2 | `enums/` | Named types, constants, iota, `String()` | done |
+| 3 | `receivers/` | Structs & pointer vs value receivers | in progress |
 | 4 | | Pointers, nil, escape to heap | |
 | 5 | | Slices — header, append, aliasing | |
 | 6 | | Maps — comma-ok, random iteration order | |
