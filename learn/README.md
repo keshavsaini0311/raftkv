@@ -10,9 +10,9 @@ Run everything: `go test ./learn/...`
 |---|---------|-------|--------|
 | 1 | `basics/` | Packages, exports, zero values | done |
 | 2 | `enums/` | Named types, constants, iota, `String()` | done |
-| 3 | `receivers/` | Structs & pointer vs value receivers | in progress |
-| 4 | | Pointers, nil, escape to heap | |
-| 5 | | Slices — header, append, aliasing | |
+| 3 | `receivers/` | Structs & pointer vs value receivers | done |
+| 4 | — | Pointers & nil — folded into 3 and 5 | merged |
+| 5 | `slicing/` | Slices — header, append, aliasing, nil | in progress |
 | 6 | | Maps — comma-ok, random iteration order | |
 | 7 | | Interfaces — implicit satisfaction, the nil trap | |
 | 8 | | Errors as values, wrapping, sentinels | |
