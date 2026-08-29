@@ -97,7 +97,8 @@ func AppendToPrefix(s []int, n, v int) []int {
 // ---------------------------------------------------------------------------
 
 func TruncateAndAppend(log []string, i int, entries ...string) []string {
-	temp := log[:i:i]
+	temp := make([]string, 0, i+len(entries))
+	temp = append(temp, log[:i]...)
 	temp = append(temp, entries...)
 	return temp
 }

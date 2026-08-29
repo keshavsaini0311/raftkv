@@ -68,6 +68,26 @@ func TestSlicingKeepsCapacity(t *testing.T) {
 	}
 }
 
+// The result must be INDEPENDENT of the input, not merely leave it unmodified
+// during the call. This is the heartbeat case: zero entries appended, so a
+// capacity-capped implementation has nothing to force a reallocation and hands
+// back a slice that still points at the caller's array.
+func TestTruncateAndAppendResultDoesNotAliasInput(t *testing.T) {
+	log := []string{"a", "b", "c"}
+
+	got := slicing.TruncateAndAppend(log, 1) // no entries — the heartbeat shape
+	if len(got) != 1 || got[0] != "a" {
+		t.Fatalf("got %v, want [a]", got)
+	}
+
+	got[0] = "MUTATED"
+
+	if log[0] != "a" {
+		t.Errorf("writing to the result changed the caller's log[0] to %q — "+
+			"the returned slice shares a backing array with the input", log[0])
+	}
+}
+
 // Exercise 3: the Raft operation. Correct result AND an untouched input.
 func TestTruncateAndAppend(t *testing.T) {
 	tests := []struct {
