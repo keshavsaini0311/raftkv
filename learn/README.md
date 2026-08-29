@@ -12,8 +12,8 @@ Run everything: `go test ./learn/...`
 | 2 | `enums/` | Named types, constants, iota, `String()` | done |
 | 3 | `receivers/` | Structs & pointer vs value receivers | done |
 | 4 | — | Pointers & nil — folded into 3 and 5 | merged |
-| 5 | `slicing/` | Slices — header, append, aliasing, nil | in progress |
-| 6 | | Maps — comma-ok, random iteration order | |
+| 5 | `slicing/` | Slices — header, append, aliasing, nil | done |
+| 6 | `mapping/` | Maps — comma-ok, nil maps, random iteration order | in progress |
 | 7 | | Interfaces — implicit satisfaction, the nil trap | |
 | 8 | | Errors as values, wrapping, sentinels | |
 | 9 | | Testing — table-driven, subtests, `-race` | |
