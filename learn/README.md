@@ -8,8 +8,8 @@ Run everything: `go test ./learn/...`
 
 | # | Package | Topic | Status |
 |---|---------|-------|--------|
-| 1 | `basics/` | Packages, exports, zero values | in progress |
-| 2 | | Types, constants, iota | |
+| 1 | `basics/` | Packages, exports, zero values | done |
+| 2 | `enums/` | Named types, constants, iota, `String()` | in progress |
 | 3 | | Structs & pointer vs value receivers | |
 | 4 | | Pointers, nil, escape to heap | |
 | 5 | | Slices — header, append, aliasing | |
