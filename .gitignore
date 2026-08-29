@@ -1,0 +1,6 @@
+raftkv
+/bin/
+*.test
+*.out
+coverage.*
+.DS_Store
