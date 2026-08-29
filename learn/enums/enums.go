@@ -31,7 +31,7 @@ package enums
 // TODO(keshav): declare Role as a new type with underlying type int.
 // ---------------------------------------------------------------------------
 
-// <-- your type declaration goes here
+type Role int
 
 // ---------------------------------------------------------------------------
 // Exercise 2 — iota
@@ -51,8 +51,11 @@ package enums
 // TODO(keshav): declare Follower, Candidate, and Leader as Roles, using iota,
 // so that Follower == 0, Candidate == 1, Leader == 2. Write "iota" exactly once.
 // ---------------------------------------------------------------------------
-
-// <-- your const block goes here
+const (
+	Follower Role = iota
+	Candidate
+	Leader
+)
 
 // ---------------------------------------------------------------------------
 // Exercise 3 — String(), your first method
@@ -78,3 +81,16 @@ package enums
 // ---------------------------------------------------------------------------
 
 // <-- your String method goes here
+
+func (r Role) String() string {
+	switch r {
+	case Follower:
+		return "Follower"
+	case Leader:
+		return "Leader"
+	case Candidate:
+		return "Candidate"
+	default:
+		return "unknown"
+	}
+}
