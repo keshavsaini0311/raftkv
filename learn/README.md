@@ -14,7 +14,7 @@ Run everything: `go test ./learn/...`
 | 4 | — | Pointers & nil — folded into 3 and 5 | merged |
 | 5 | `slicing/` | Slices — header, append, aliasing, nil | done |
 | 6 | `mapping/` | Maps — comma-ok, nil maps, random iteration order | done |
-| 7 | `ifaces/` | Interfaces — implicit satisfaction, method sets, nil trap | in progress |
-| 8 | | Errors as values, wrapping, sentinels | |
+| 7 | `ifaces/` | Interfaces — implicit satisfaction, method sets, nil trap | done |
+| 8 | `errs/` | Errors as values, sentinels, `%w`, `Is`/`As` | in progress |
 | 9 | | Testing — table-driven, subtests, `-race` | |
 | 10 | | Concurrency — goroutines, channels, mutexes | |
