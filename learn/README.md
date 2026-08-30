@@ -15,6 +15,6 @@ Run everything: `go test ./learn/...`
 | 5 | `slicing/` | Slices — header, append, aliasing, nil | done |
 | 6 | `mapping/` | Maps — comma-ok, nil maps, random iteration order | done |
 | 7 | `ifaces/` | Interfaces — implicit satisfaction, method sets, nil trap | done |
-| 8 | `errs/` | Errors as values, sentinels, `%w`, `Is`/`As` | in progress |
-| 9 | | Testing — table-driven, subtests, `-race` | |
-| 10 | | Concurrency — goroutines, channels, mutexes | |
+| 8 | `errs/` | Errors as values, sentinels, `%w`, `Is`/`As` | done |
+| 9 | — | Testing — skipped; Claude writes the test harness per the design doc | skipped |
+| 10 | `conc/` | Concurrency — goroutines, channels, mutexes, `-race` | in progress |
