@@ -15,8 +15,8 @@ package basics
 // TODO(keshav): make this reachable from basics_test. Return "hello, raft".
 // ---------------------------------------------------------------------------
 
-func greeting() string {
-	panic("TODO: exercise 1")
+func Greeting() string {
+	return "hello, raft"
 }
 
 // ---------------------------------------------------------------------------
@@ -38,7 +38,8 @@ type Config struct {
 //
 // TODO(keshav): exercise 2. One line.
 func ZeroConfig() Config {
-	panic("TODO: exercise 2")
+	c := Config{}
+	return c
 }
 
 // IsUnset reports whether every field of c still holds its zero value.
@@ -46,5 +47,5 @@ func ZeroConfig() Config {
 // TODO(keshav): exercise 3. Your first instinct will be `return c == Config{}`.
 // Try it — read the compiler error carefully, it is the whole lesson.
 func IsUnset(c Config) bool {
-	panic("TODO: exercise 3")
+	return !c.Debug && c.Name == "" && c.Limits == nil && c.Parent == nil && c.Retries == 0 && c.Tags == nil
 }

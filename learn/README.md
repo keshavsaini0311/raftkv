@@ -8,13 +8,13 @@ Run everything: `go test ./learn/...`
 
 | # | Package | Topic | Status |
 |---|---------|-------|--------|
-| 1 | `basics/` | Packages, exports, zero values | in progress |
-| 2 | | Types, constants, iota | |
-| 3 | | Structs & pointer vs value receivers | |
-| 4 | | Pointers, nil, escape to heap | |
-| 5 | | Slices — header, append, aliasing | |
-| 6 | | Maps — comma-ok, random iteration order | |
-| 7 | | Interfaces — implicit satisfaction, the nil trap | |
-| 8 | | Errors as values, wrapping, sentinels | |
-| 9 | | Testing — table-driven, subtests, `-race` | |
-| 10 | | Concurrency — goroutines, channels, mutexes | |
+| 1 | `basics/` | Packages, exports, zero values | done |
+| 2 | `enums/` | Named types, constants, iota, `String()` | done |
+| 3 | `receivers/` | Structs & pointer vs value receivers | done |
+| 4 | — | Pointers & nil — folded into 3 and 5 | merged |
+| 5 | `slicing/` | Slices — header, append, aliasing, nil | done |
+| 6 | `mapping/` | Maps — comma-ok, nil maps, random iteration order | done |
+| 7 | `ifaces/` | Interfaces — implicit satisfaction, method sets, nil trap | done |
+| 8 | `errs/` | Errors as values, sentinels, `%w`, `Is`/`As` | done |
+| 9 | — | Testing — skipped; Claude writes the test harness per the design doc | skipped |
+| 10 | `conc/` | Concurrency — goroutines, channels, mutexes, `-race` | in progress |
