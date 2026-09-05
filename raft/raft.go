@@ -123,16 +123,7 @@ func (n *Node) Tick() {
 
 		if n.heartbeatElapsed >= heartbeatTimeout {
 			n.heartbeatElapsed = 0
-			for _, peer := range n.peers {
-				n.send(Message{
-					Type:         MsgAppendEntries,
-					Term:         n.currentTerm,
-					From:         n.id,
-					To:           peer,
-					PrevLogIndex: n.lastIndex(),
-					PrevLogTerm:  n.lastTerm(),
-				})
-			}
+			n.bcastHeartbeat()
 		}
 	}
 	fmt.Println("Tick", n.role, n.electionElapsed, n.heartbeatElapsed)
@@ -241,7 +232,23 @@ func (n *Node) Step(m Message) error {
 // Two calls with no Advance between them must return the same thing. Draining
 // the queue here would silently lose messages the driver never sent.
 func (n *Node) Ready() Ready {
-	panic("TODO: milestone 1")
+	// Entries and CommittedEntries are deliberately absent: Node has no log in
+	// milestone 1, so there is nothing to populate them from. Their zero value
+	// is nil, which is exactly right.
+	rd := Ready{Messages: n.msgs}
+
+	// Only ask the driver to fsync when something durable actually changed.
+	// A plain == works because every HardState field is numeric — that is why
+	// Entry carries the []byte and HardState does not.
+	//
+	// &hs takes the address of a local, which is safe in Go: escape analysis
+	// sees the pointer outlive this call and heap-allocates hs instead of
+	// putting it on the stack. No dangling pointer, no manual allocation.
+	if hs := n.hardState(); hs != n.prevHardState {
+		rd.HardState = &hs
+	}
+
+	return rd
 }
 
 // Advance acknowledges that the driver handled everything in r.
@@ -277,7 +284,23 @@ func (n *Node) Ready() Ready {
 // want to rely on, and if you choose truncation, say so in a comment so the
 // assumption is written down rather than implied.
 func (n *Node) Advance(r Ready) {
-	panic("TODO: milestone 1")
+	// Only record what was actually persisted. A nil HardState means the
+	// driver wrote nothing, so overwriting prevHardState here would make the
+	// next genuine change invisible and skip an fsync we needed.
+	if r.HardState != nil {
+		n.prevHardState = *r.HardState
+	}
+
+	// Drop exactly what was handed out. A correct driver calls neither Tick
+	// nor Step between Ready and Advance, so this is normally all of n.msgs.
+	// Dropping by COUNT rather than truncating to nil means a driver that
+	// breaks that rule loses nothing — silently dropping unsent messages
+	// would look like a network fault and be nearly impossible to trace.
+	if len(r.Messages) >= len(n.msgs) {
+		n.msgs = nil // release the backing array rather than growing forever
+	} else {
+		n.msgs = n.msgs[len(r.Messages):]
+	}
 }
 
 // =============================================================================
@@ -319,7 +342,17 @@ func (n *Node) Advance(r Ready) {
 // keep a node from ever campaigning ("livelock by resets"). etcd/raft resets
 // unconditionally too, and instead controls which messages get here.
 func (n *Node) becomeFollower(term Term, lead NodeID) {
-	panic("TODO: milestone 1")
+	// Order matters: once currentTerm is overwritten, the comparison that
+	// tells us whether the term advanced is gone. One vote per TERM, so the
+	// vote resets on a term change and survives a mere role change.
+	if term > n.currentTerm {
+		n.votedFor = None
+	}
+
+	n.currentTerm = term
+	n.role = Follower
+	n.lead = lead
+	n.resetElectionTimer()
 }
 
 // becomeCandidate starts a new election. Figure 2, "Candidates".
@@ -355,7 +388,36 @@ func (n *Node) becomeFollower(term Term, lead NodeID) {
 // identically, forever. A fresh random draw per election is the only thing that
 // breaks the symmetry, and it is the entire reason randIntn exists.
 func (n *Node) becomeCandidate() {
-	panic("TODO: milestone 1")
+	n.currentTerm++
+	n.role = Candidate
+	n.lead = None // we are here precisely because we know of no leader
+
+	// A FRESH map, not a cleared reuse. Any grant left over from the previous
+	// election would count toward this one: campaign at term 3, collect one
+	// grant, fail, campaign at term 4, and a single new grant now looks like
+	// two. Leader of term 4 on a minority of term-4 votes.
+	n.votes = make(map[NodeID]bool)
+
+	n.votedFor = n.id
+	n.votes[n.id] = true
+
+	// New random timeout for this election. Without the redraw, nodes that
+	// split a vote wake together and split it identically, forever.
+	n.resetElectionTimer()
+
+	// The self-vote may already BE the majority — a one-node cluster has
+	// quorum 1. Check before campaigning, because campaign() would send zero
+	// messages and we would then wait for responses that never arrive.
+	//
+	// This is not an N==1 special case: it is the general rule that a
+	// candidate evaluates its quorum whenever its vote count changes, and its
+	// own vote is the first change.
+	if n.grantedVotes() >= n.quorum() {
+		n.becomeLeader()
+		return
+	}
+
+	n.campaign()
 }
 
 // becomeLeader is called on winning an election.
@@ -385,7 +447,16 @@ func (n *Node) becomeCandidate() {
 // bcastHeartbeat helper — duplicating a message literal is how the earlier
 // duplicated-block bug happened.
 func (n *Node) becomeLeader() {
-	panic("TODO: milestone 1")
+	// currentTerm is deliberately untouched. The leader serves the term it
+	// just won; incrementing here would abandon the votes it holds.
+	n.role = Leader
+	n.lead = n.id
+	n.heartbeatElapsed = 0
+
+	// Immediately, not on the next heartbeat tick. Every peer is running its
+	// own election clock right now, and the first one to time out starts a
+	// competing election at a higher term that deposes us for no reason.
+	n.bcastHeartbeat()
 }
 
 // campaign broadcasts RequestVote to every peer.
@@ -417,7 +488,49 @@ func (n *Node) becomeLeader() {
 // N=3 correct for the same reason rather than a different one. Decide whether
 // that check lives here or in becomeCandidate, and be able to say why.
 func (n *Node) campaign() {
-	panic("TODO: milestone 1")
+	for _, peer := range n.peers {
+		// Term and From are left unset on purpose — send() stamps both.
+		n.send(Message{
+			Type:         MsgRequestVote,
+			To:           peer,
+			LastLogIndex: n.lastIndex(),
+			LastLogTerm:  n.lastTerm(),
+		})
+	}
+}
+
+// bcastHeartbeat sends an empty AppendEntries to every peer.
+//
+// Extracted because it has two callers — the heartbeat timer in Tick and the
+// immediate broadcast in becomeLeader. Two copies of a message literal is how
+// the duplicated-leader-block bug happened earlier; one function cannot drift
+// from itself.
+func (n *Node) bcastHeartbeat() {
+	for _, peer := range n.peers {
+		n.send(Message{
+			Type:         MsgAppendEntries,
+			To:           peer,
+			PrevLogIndex: n.lastIndex(),
+			PrevLogTerm:  n.lastTerm(),
+		})
+	}
+}
+
+// grantedVotes counts how many peers actually GRANTED, not how many replied.
+//
+// n.votes stores refusals as false so a retried response stays idempotent, so
+// len(n.votes) is the number of answers received — a completely different
+// number. Counting answers instead of grants elects a node that everybody
+// rejected. Two callers: becomeCandidate (the self-vote) and
+// handleRequestVoteResp (every subsequent one).
+func (n *Node) grantedVotes() int {
+	count := 0
+	for _, granted := range n.votes {
+		if granted {
+			count++
+		}
+	}
+	return count
 }
 
 // =============================================================================
@@ -459,7 +572,32 @@ func (n *Node) campaign() {
 // on granting a vote. You just endorsed someone else's candidacy; immediately
 // timing out and campaigning against them would split the vote you just cast.
 func (n *Node) handleRequestVote(m Message) {
-	panic("TODO: milestone 1")
+	// "or already m.From" is idempotency, not redundancy: if our reply was
+	// dropped and the candidate retries, it must get the same answer. Without
+	// it we would refuse a candidate we already voted for, and one lost packet
+	// costs an election.
+	canVote := n.votedFor == None || n.votedFor == m.From
+
+	// §5.4.1. Always true in milestone 1 (both logs empty), and wired now so
+	// milestone 2 inherits it instead of bolting it on after replication works.
+	granted := canVote && n.isUpToDate(m.LastLogIndex, m.LastLogTerm)
+
+	if granted {
+		n.votedFor = m.From
+		// Figure 2, Followers: the clock restarts on granting a vote. Having
+		// just endorsed someone, timing out and running against them would
+		// split the vote we just cast.
+		n.resetElectionTimer()
+	}
+
+	// Reply either way. Silence is indistinguishable from a partition, and the
+	// reply carries our term (stamped by send), which is how a candidate on a
+	// stale term learns to step down instead of retrying forever.
+	n.send(Message{
+		Type:        MsgRequestVoteResp,
+		To:          m.From,
+		VoteGranted: granted,
+	})
 }
 
 // handleRequestVoteResp counts a vote.
@@ -492,7 +630,20 @@ func (n *Node) handleRequestVote(m Message) {
 // early. Figure 2 does not do this — the election timeout handles it. Adding it
 // is an optimization, not a correctness fix.
 func (n *Node) handleRequestVoteResp(m Message) {
-	panic("TODO: milestone 1")
+	// Responses outlive the elections that caused them. We may have already
+	// won, already stepped down, or moved on. Acting on a reply to a finished
+	// election could promote a node that is now following a real leader.
+	if n.role != Candidate {
+		return
+	}
+
+	// Record refusals too — see grantedVotes for why this is a bool map and
+	// not a counter.
+	n.votes[m.From] = m.VoteGranted
+
+	if n.grantedVotes() >= n.quorum() {
+		n.becomeLeader()
+	}
 }
 
 // handleAppendEntries processes a heartbeat. Milestone 1 carries no entries, so
@@ -525,7 +676,25 @@ func (n *Node) handleRequestVoteResp(m Message) {
 // Routing through becomeFollower gives you this for free, which is the point
 // of having one transition function rather than assigning fields inline.
 func (n *Node) handleAppendEntries(m Message) {
-	panic("TODO: milestone 1")
+	// Step guarantees m.Term == n.currentTerm here, so this is a legitimate
+	// leader of our own term. becomeFollower does three jobs at once:
+	//
+	//   - a CANDIDATE steps down. Equal term, not higher — someone else
+	//     already collected a majority for this term while we waited, and
+	//     there is exactly one leader per term, so we lost.
+	//   - lead is recorded, which milestone 3 needs for client redirects.
+	//   - the election timer resets. THIS is the only thing keeping followers
+	//     quiet; lose the leader and these timers run out, which is the whole
+	//     failure detector.
+	//
+	// votedFor survives, because the term did not change.
+	n.becomeFollower(m.Term, m.From)
+
+	n.send(Message{
+		Type:    MsgAppendEntriesResp,
+		To:      m.From,
+		Success: true,
+	})
 }
 
 // =============================================================================
@@ -565,7 +734,13 @@ func (n *Node) handleAppendEntries(m Message) {
 // partition, which is to say only in production or in milestone 4's simulator.
 // Write the worked examples above as a table test if you are unsure.
 func (n *Node) quorum() int {
-	panic("TODO: milestone 1")
+	// +1 because the cluster is the peers PLUS this node. Integer division
+	// then +1 gives "strictly more than half":
+	//
+	//	peers 0 -> cluster 1 -> 1     peers 3 -> cluster 4 -> 3
+	//	peers 1 -> cluster 2 -> 2     peers 4 -> cluster 5 -> 3
+	//	peers 2 -> cluster 3 -> 2
+	return (len(n.peers)+1)/2 + 1
 }
 
 // isUpToDate implements the §5.4.1 election restriction: is a candidate's log
@@ -608,7 +783,16 @@ func (n *Node) quorum() int {
 // committed entries off a majority. It reproduces once in a thousand runs and
 // costs a day. Four lines now, and the callers never change.
 func (n *Node) isUpToDate(lastIndex Index, lastTerm Term) bool {
-	panic("TODO: milestone 1")
+	myTerm, myIndex := n.lastTerm(), n.lastIndex()
+
+	// Term first: a longer log is not a better log. Extra entries can be
+	// uncommitted garbage from a partitioned leader that never reached a
+	// majority. A higher last term was accepted more recently by a cluster
+	// that had moved on.
+	//
+	// >= on the index, not >. An identical log is perfectly electable — using
+	// > would make a cluster whose nodes all agree unable to elect anyone.
+	return lastTerm > myTerm || (lastTerm == myTerm && lastIndex >= myIndex)
 }
 
 // lastIndex and lastTerm describe the tail of the log.
