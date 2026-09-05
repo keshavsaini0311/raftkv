@@ -238,12 +238,7 @@ func (n *Node) Ready() Ready {
 	rd := Ready{Messages: n.msgs}
 
 	// Only ask the driver to fsync when something durable actually changed.
-	// A plain == works because every HardState field is numeric — that is why
-	// Entry carries the []byte and HardState does not.
-	//
-	// &hs takes the address of a local, which is safe in Go: escape analysis
-	// sees the pointer outlive this call and heap-allocates hs instead of
-	// putting it on the stack. No dangling pointer, no manual allocation.
+	// A plain == works because every HardStat
 	if hs := n.hardState(); hs != n.prevHardState {
 		rd.HardState = &hs
 	}
