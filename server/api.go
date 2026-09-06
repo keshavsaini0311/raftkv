@@ -146,13 +146,15 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 			dropped[strconv.FormatUint(uint64(id), 10)] = n
 		}
 	}
+	view, _ := s.localView()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(statusResponse{
 		ID:      uint64(s.cfg.ID),
 		Role:    role.String(),
 		Term:    uint64(term),
 		Leader:  uint64(lead),
-		Applied: s.kv.Len(),
+		Applied: view.Count,
 		Dropped: dropped,
 	})
 }
@@ -161,6 +163,14 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 // the answer may be stale — which is fine for inspecting a node's view during
 // a partition, and exactly why it is not the read path clients use.
 func (s *Server) keysHandler(w http.ResponseWriter, r *http.Request) {
+	view, ok := s.localView()
+	if !ok {
+		s.writeErr(w, http.StatusServiceUnavailable, ErrTimeout)
+		return
+	}
+	if view.Keys == nil {
+		view.Keys = []string{}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.kv.Keys())
+	json.NewEncoder(w).Encode(view.Keys)
 }

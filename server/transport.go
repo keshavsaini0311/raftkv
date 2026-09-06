@@ -66,11 +66,15 @@ func NewTransport(self raft.NodeID, peers map[raft.NodeID]string, log *slog.Logg
 }
 
 // Send hands messages to the per-peer queues. Never blocks.
+//
+// The lock is held for the WHOLE loop, not just the closed check. Releasing it
+// between the check and the send leaves a window in which Close can close the
+// queues, and a send on a closed channel panics. Holding it is safe precisely
+// because this function cannot block: every send has a default branch.
 func (t *Transport) Send(msgs []raft.Message) {
 	t.mu.Lock()
-	closed := t.closed
-	t.mu.Unlock()
-	if closed {
+	defer t.mu.Unlock()
+	if t.closed {
 		return
 	}
 
@@ -136,6 +140,9 @@ func (t *Transport) Close() {
 		close(q)
 	}
 	t.mu.Unlock()
+	// Waited on OUTSIDE the lock: a sender goroutine may be mid-request, and
+	// holding the lock while waiting would block any concurrent Send that is
+	// about to observe closed and return.
 	t.wg.Wait()
 }
 

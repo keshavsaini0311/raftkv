@@ -390,6 +390,23 @@ buffer whole while every other peer waits behind it. Now bounded at 256.
 Neither is a correctness bug, which is exactly why no test caught them. A test
 suite answers "is it right"; only a benchmark answers "is it viable".
 
+### Two data races, found by -race the moment server/ had tests
+
+Both were violations of this repo's own stated invariant — *exactly one
+goroutine touches the state machine* — and neither is reachable without
+concurrent load, which is why nothing before had found them.
+
+**`/keys` and `/status` read `kv.Store` from HTTP goroutines** while `run()`
+was applying entries into it. Fixed by routing those reads through the driver
+loop over a channel, rather than by adding a mutex: a lock would have made the
+race go away while leaving the invariant broken, and the next person to touch
+the state machine would reintroduce it.
+
+**`Transport.Send` checked `closed`, released the lock, then sent.** `Close`
+could close the queue inside that window, and a send on a closed channel
+panics. The lock is now held for the whole loop, which is safe precisely
+because `Send` can never block — every send has a `default` branch.
+
 ### Failure 3 — the real one
 
 After the two harness fixes, only `chaos` still failed, and only at seed 2 —
@@ -468,10 +485,6 @@ Stated plainly rather than left to be discovered:
 - **The simulator never shrinks below three voters.** Below that the cluster
   cannot tolerate the nemesis's own crashes, and every assertion would pass by
   making nothing happen.
-- **`server/` has no unit tests.** It is covered end-to-end by
-  `scripts/manual-test.sh` and, structurally, by `sim/` exercising the same
-  driver contract — but its HTTP layer specifically is only tested by the
-  script.
 - **The linearizability checker can time out** on very long histories. It
   reports `Unknown`, which is logged as "not a failure, but not a proof either"
   rather than being quietly treated as a pass.

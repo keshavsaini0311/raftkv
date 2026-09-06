@@ -80,6 +80,18 @@ type proposal struct {
 	err    chan error
 }
 
+// localView is a snapshot of state-machine facts for the debugging endpoints.
+//
+// It exists because /keys and /status must NOT touch s.kv directly: that map is
+// written by run() as it applies entries, and reading it from an HTTP goroutine
+// is a data race — one the race detector found the moment this package grew
+// tests. Routing the request through the driver loop keeps the invariant that
+// exactly one goroutine touches the state machine.
+type localView struct {
+	Keys  []string
+	Count int
+}
+
 // readReq is a client read waiting for ReadIndex to confirm leadership.
 type readReq struct {
 	key    string
@@ -99,6 +111,7 @@ type Server struct {
 	propC chan proposal
 	readC chan readReq
 	recvC chan raft.Message
+	viewC chan chan localView
 
 	// waiters maps a log index to the client blocked on it. Touched only by
 	// run(), so it needs no lock.
@@ -164,6 +177,7 @@ func New(cfg Config) (*Server, error) {
 		propC:        make(chan proposal),
 		readC:        make(chan readReq),
 		recvC:        make(chan raft.Message, 1024),
+		viewC:        make(chan chan localView),
 		waiters:      make(map[raft.Index]waiter),
 		pendingReads: make(map[uint64]readReq),
 		stop:         make(chan struct{}),
@@ -258,6 +272,14 @@ func (s *Server) run(ctx context.Context) {
 			// s.node.Term(), not the cached status: updateStatus runs later
 			// in the loop, so the cache can still hold the previous term.
 			s.waiters[idx] = waiter{prop: p, term: s.node.Term()}
+
+		case reply := <-s.viewC:
+			// Served from the driver goroutine, so the state machine is still
+			// touched by exactly one goroutine. Deliberately a LOCAL read: no
+			// ReadIndex, so the answer may be stale, which is fine for a
+			// debugging endpoint and is documented as such.
+			reply <- localView{Keys: s.kv.Keys(), Count: s.kv.Len()}
+			continue
 
 		case r := <-s.readC:
 			s.readToken++
@@ -375,6 +397,30 @@ func (s *Server) failAllWaiters(err error) {
 	for token, r := range s.pendingReads {
 		r.err <- err
 		delete(s.pendingReads, token)
+	}
+}
+
+// localView asks the driver loop for a state-machine snapshot.
+func (s *Server) localView() (localView, bool) {
+	reply := make(chan localView, 1)
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+
+	select {
+	case s.viewC <- reply:
+	case <-s.stop:
+		return localView{}, false
+	case <-timeout.C:
+		return localView{}, false
+	}
+
+	select {
+	case v := <-reply:
+		return v, true
+	case <-s.stop:
+		return localView{}, false
+	case <-timeout.C:
+		return localView{}, false
 	}
 }
 

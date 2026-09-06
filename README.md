@@ -150,9 +150,9 @@ Current numbers:
 | `kv/` | 233 | 199 | 74.2% |
 | `storage/` | 273 | 186 | 82.6% |
 | `sim/` | 1,120 | 572 | 93.8% |
-| `server/` | 883 | — | covered end-to-end |
+| `server/` | 920 | 380 | 68.4% |
 
-**63 tests.** Several exist only because *mutation testing* showed the suite
+**70 tests.** Several exist only because *mutation testing* showed the suite
 missed them — deleting the votes-map reset, clearing `votedFor` on every
 stepdown, or dropping the post-election heartbeat each broke **no test at all**,
 despite each being a documented path to two leaders in one term.
@@ -180,6 +180,13 @@ it at seed 2, reproducibly, in 20 milliseconds.
 ```go
 waiters map[raft.Index]waiter     // after: keyed by (term, index)
 ```
+
+**Two data races in `server/`** were found the moment that package got tests,
+by `go test -race`: the `/keys` and `/status` handlers read the state machine
+from HTTP goroutines while the driver loop was writing to it, and
+`Transport.Close` could close a send queue while `Send` was writing to it. Both
+were violations of this repo's own stated invariant — exactly one goroutine
+touches the state machine — and neither was reachable without concurrent load.
 
 Two *harness* bugs were found on the way, both of which looked exactly like Raft
 bugs and were not — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md#debugging-the-checker).
