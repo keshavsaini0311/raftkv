@@ -170,9 +170,20 @@ One file, ~1.3 MB, no server. It contains the **actual raft core compiled to
 WebAssembly** — not a JavaScript retelling of the algorithm, which would drift
 from this implementation and quietly teach you something untrue.
 
-Crash a node. Isolate the leader. Force an election. Propose a write and watch
-it sit uncommitted until a majority acknowledges it. Remove a node from the
-configuration and watch the cluster pass through joint consensus.
+**Six guided lessons** drive the cluster step by step and explain what to look
+at — how a leader is chosen, what "committed" actually means, the leader that
+doesn't know it was deposed, losing the majority, catching a follower up, and
+changing membership safely. The lessons run the real simulator, so a lesson
+cannot narrate over something the algorithm didn't do.
+
+Or drive it yourself: crash a node, isolate the leader, force an election,
+propose a write and watch it sit uncommitted until a majority acknowledges it.
+
+**The timeline rewinds.** Scrub back to any tick and replay it. That works
+because the simulator is deterministic — rewinding replays the recorded
+commands from a fresh cluster rather than restoring a snapshot, so a revisited
+tick is not an approximation of the past, it *is* the past. Act while rewound
+and the timeline forks.
 
 The centre of the page is the **replicated log**: every node's log, aligned by
 index, coloured by the term that created each entry. Committed entries are
