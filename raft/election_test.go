@@ -385,9 +385,9 @@ func TestLeaderHeartbeatsImmediatelyOnElection(t *testing.T) {
 			heartbeats++
 		}
 	}
-	if heartbeats != len(n.peers) {
+	if heartbeats != len(n.peers()) {
 		t.Errorf("sent %d heartbeats on election, want %d (one per peer). Every "+
 			"peer's election clock is already running; waiting a tick lets one "+
-			"time out and depose the leader that just won", heartbeats, len(n.peers))
+			"time out and depose the leader that just won", heartbeats, len(n.peers()))
 	}
 }

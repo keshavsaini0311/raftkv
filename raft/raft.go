@@ -1,9 +1,6 @@
 package raft
 
-import (
-	"errors"
-	"sort"
-)
+import "errors"
 
 // Timing is counted in TICKS, never durations. One Tick() is one unit of
 // logical time; what that means in wall time is the driver's business.
@@ -22,6 +19,15 @@ var (
 
 	// ErrNotLeader is returned by Propose on a node that is not the leader.
 	ErrNotLeader = errors.New("raft: not the leader")
+
+	// ErrConfChangeInFlight means a membership change is already mid-transition.
+	ErrConfChangeInFlight = errors.New("raft: a configuration change is already in flight")
+
+	// ErrNoSuchNode means the node to remove is not a member.
+	ErrNoSuchNode = errors.New("raft: node is not a member")
+
+	// ErrNodeExists means the node to add is already a member.
+	ErrNodeExists = errors.New("raft: node is already a member")
 
 	// ErrSnapshotAhead means the requested snapshot index is past what the
 	// state machine has applied.
@@ -48,9 +54,17 @@ type pendingRead struct {
 // No goroutine touches a Node. The driver serialises every call onto a single
 // goroutine, which is what lets the core hold no locks.
 type Node struct {
-	id    NodeID
-	peers []NodeID // other nodes; does not include id
-	role  Role
+	id   NodeID
+	role Role
+
+	// cfg is cluster membership. While joint (mid-transition) it holds both
+	// the old and new voter sets, and every quorum decision needs a majority
+	// of BOTH — that overlap is what makes a membership change safe.
+	cfg config
+
+	// bootstrapCfg is the membership to fall back to when the log contains no
+	// configuration entry, either at startup or after truncation removed one.
+	bootstrapCfg config
 
 	// Persistent state (Figure 2). Must be durable before any RPC reply.
 	currentTerm Term
@@ -112,17 +126,20 @@ func NewNode(id NodeID, peers []NodeID, randIntn func(n int) int) *Node {
 		panic("raft: NewNode requires a randIntn source")
 	}
 
-	// Copy the peer slice: an append on the caller's side must not silently
-	// reshape this node's view of the cluster.
-	peersCopy := make([]NodeID, len(peers))
-	copy(peersCopy, peers)
+	// The configuration is built from a copy: an append on the caller's side
+	// must not silently reshape this node's view of the cluster.
+	voters := make([]NodeID, 0, len(peers)+1)
+	voters = append(voters, id)
+	voters = append(voters, peers...)
+	cfg := newConfig(voters)
 
 	n := &Node{
-		id:       id,
-		peers:    peersCopy,
-		log:      newLog(),
-		votes:    make(map[NodeID]bool),
-		randIntn: randIntn,
+		id:           id,
+		cfg:          cfg,
+		bootstrapCfg: cfg,
+		log:          newLog(),
+		votes:        make(map[NodeID]bool),
+		randIntn:     randIntn,
 	}
 
 	// Routed through becomeFollower so construction and stepdown produce
@@ -154,6 +171,8 @@ func (n *Node) Restore(hs HardState, ents []Entry, snap *Snapshot) {
 		n.log.commitTo(hs.Commit)
 		n.prevHardState = hs
 	}
+	n.applyConfFromLog()
+
 	// Always a follower on restart. A node that was leader before the crash
 	// has no idea whether the cluster elected someone else meanwhile, and
 	// resuming leadership on its own authority would be a split brain.
@@ -161,6 +180,24 @@ func (n *Node) Restore(hs HardState, ents []Entry, snap *Snapshot) {
 	n.lead = None
 	n.resetElectionTimer()
 }
+
+// peers returns every other voting node, in a fixed order.
+func (n *Node) peers() []NodeID {
+	all := n.cfg.all()
+	out := make([]NodeID, 0, len(all))
+	for _, v := range all {
+		if v != n.id {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// Voters returns the current membership.
+func (n *Node) Voters() []NodeID { return append([]NodeID(nil), n.cfg.voters...) }
+
+// IsJoint reports whether a membership change is mid-transition.
+func (n *Node) IsJoint() bool { return n.cfg.isJoint() }
 
 // ID returns this node's identifier.
 func (n *Node) ID() NodeID { return n.id }
@@ -373,7 +410,7 @@ func (n *Node) becomeCandidate() {
 	// case: a candidate evaluates quorum whenever its vote count changes, and
 	// its own vote is the first change. Without it a one-node cluster waits
 	// for responses that no peer will ever send.
-	if n.grantedVotes() >= n.quorum() {
+	if n.hasVoteQuorum() {
 		n.becomeLeader()
 		return
 	}
@@ -387,12 +424,13 @@ func (n *Node) becomeLeader() {
 	n.lead = n.id
 	n.heartbeatElapsed = 0
 
-	n.nextIndex = make(map[NodeID]Index, len(n.peers))
-	n.matchIndex = make(map[NodeID]Index, len(n.peers))
-	n.ackedReadSeq = make(map[NodeID]uint64, len(n.peers))
+	peers := n.peers()
+	n.nextIndex = make(map[NodeID]Index, len(peers))
+	n.matchIndex = make(map[NodeID]Index, len(peers))
+	n.ackedReadSeq = make(map[NodeID]uint64, len(peers))
 	n.readSeq = 0
 	n.pendingReads = nil
-	for _, p := range n.peers {
+	for _, p := range peers {
 		n.nextIndex[p] = n.log.lastIndex() + 1
 		n.matchIndex[p] = 0
 	}
@@ -428,7 +466,7 @@ func (n *Node) Propose(data []byte) (Index, error) {
 }
 
 func (n *Node) campaign() {
-	for _, peer := range n.peers {
+	for _, peer := range n.peers() {
 		n.send(Message{
 			Type:         MsgRequestVote,
 			To:           peer,
@@ -471,12 +509,27 @@ func (n *Node) ReadIndex(ctx []byte) error {
 	})
 
 	// A single-node cluster is its own quorum: leadership is not in question.
-	if n.quorum() == 1 {
+	if len(n.peers()) == 0 {
 		n.maybeReleaseReads()
 		return nil
 	}
 	n.bcastAppend()
 	return nil
+}
+
+// jointEntryCommitted reports whether the most recent configuration entry —
+// the joint one — has committed.
+func (n *Node) jointEntryCommitted() bool {
+	for i := n.log.lastIndex(); i >= n.log.firstIndex(); i-- {
+		e, ok := n.log.at(i)
+		if !ok {
+			return false
+		}
+		if e.Type == EntryConfChange {
+			return e.Index <= n.log.committed
+		}
+	}
+	return false
 }
 
 // maybeReleaseReads promotes pending reads whose leadership has been confirmed.
@@ -486,13 +539,10 @@ func (n *Node) maybeReleaseReads() {
 	}
 	var kept []pendingRead
 	for _, pr := range n.pendingReads {
-		acks := 1 // ourselves
-		for _, p := range n.peers {
-			if n.ackedReadSeq[p] >= pr.seq {
-				acks++
-			}
-		}
-		if acks >= n.quorum() {
+		confirmed := n.cfg.hasQuorum(func(id NodeID) bool {
+			return id == n.id || n.ackedReadSeq[id] >= pr.seq
+		})
+		if confirmed {
 			n.readStates = append(n.readStates, ReadState{Index: pr.index, Ctx: pr.ctx})
 		} else {
 			kept = append(kept, pr)
@@ -513,11 +563,117 @@ func (n *Node) sendSnapshot(to NodeID) {
 	n.nextIndex[to] = n.log.snapshot.Metadata.Index + 1
 }
 
+// ProposeConfChange starts a membership change.
+//
+// It appends the JOINT configuration C_old,new. Once that entry commits, the
+// leader automatically appends C_new and the transition completes. Two entries,
+// not one, and the intermediate state is the entire safety argument: while
+// joint, every decision needs a majority of BOTH configurations, so C_old and
+// C_new can never independently elect different leaders.
+//
+// Only one change may be in flight. A second would produce a configuration
+// nobody can reason about, and the paper forbids it.
+func (n *Node) ProposeConfChange(cc ConfChange) (Index, error) {
+	if n.role != Leader {
+		return 0, ErrNotLeader
+	}
+	if n.cfg.isJoint() {
+		return 0, ErrConfChangeInFlight
+	}
+	if cc.Type == ConfChangeRemoveNode && !n.cfg.contains(cc.NodeID) {
+		return 0, ErrNoSuchNode
+	}
+	if cc.Type == ConfChangeAddNode && n.cfg.contains(cc.NodeID) {
+		return 0, ErrNodeExists
+	}
+
+	joint := n.cfg.enter(cc)
+	data, err := confState{
+		Voters:   joint.voters,
+		Outgoing: joint.outgoing,
+		Change:   &cc,
+	}.encode()
+	if err != nil {
+		return 0, err
+	}
+
+	added := n.log.append(n.currentTerm, Entry{Type: EntryConfChange, Data: data})
+	n.applyConfFromLog()
+	n.matchIndex[n.id] = n.log.lastIndex()
+	n.bcastAppend()
+	return added[0].Index, nil
+}
+
+// leaveJoint appends C_new, completing a transition whose joint entry has
+// committed.
+func (n *Node) leaveJoint() {
+	final := n.cfg.leave()
+	data, err := confState{Voters: final.voters}.encode()
+	if err != nil {
+		return
+	}
+	n.log.append(n.currentTerm, Entry{Type: EntryConfChange, Data: data})
+	n.applyConfFromLog()
+	n.matchIndex[n.id] = n.log.lastIndex()
+	n.bcastAppend()
+}
+
+// applyConfFromLog adopts the most recent configuration entry in the log.
+//
+// Applied when the entry is APPENDED, not when it commits. Figure 2's §6 rule:
+// "a server always uses the latest configuration in its log, regardless of
+// whether it is committed." Waiting for commitment would deadlock — the entry
+// cannot commit without a quorum of the configuration it defines.
+//
+// A rescan is also correct after truncation: if a new leader removes the
+// configuration entry, membership must revert to whatever remains, and
+// scanning backwards from the tail finds exactly that.
+func (n *Node) applyConfFromLog() {
+	for i := n.log.lastIndex(); i >= n.log.firstIndex(); i-- {
+		e, ok := n.log.at(i)
+		if !ok {
+			break
+		}
+		if e.Type != EntryConfChange {
+			continue
+		}
+		cs, err := decodeConfState(e.Data)
+		if err != nil {
+			break
+		}
+		n.cfg = config{
+			voters:   append([]NodeID(nil), cs.Voters...),
+			outgoing: append([]NodeID(nil), cs.Outgoing...),
+		}
+		sortNodeIDs(n.cfg.voters)
+		sortNodeIDs(n.cfg.outgoing)
+		n.ensureProgress()
+		return
+	}
+	// No configuration entry survives in the log.
+	n.cfg = n.bootstrapCfg
+	n.ensureProgress()
+}
+
+// ensureProgress gives newly added peers progress entries, so the leader starts
+// replicating to them immediately rather than on the next election.
+func (n *Node) ensureProgress() {
+	if n.role != Leader || n.nextIndex == nil {
+		return
+	}
+	for _, p := range n.peers() {
+		if _, ok := n.nextIndex[p]; !ok {
+			n.nextIndex[p] = n.log.lastIndex() + 1
+			n.matchIndex[p] = 0
+		}
+	}
+}
+
 // bcastAppend sends each peer whatever it is missing. A caught-up peer gets
 // zero entries, which is exactly a heartbeat — so replication and heartbeating
 // are one code path rather than two that can disagree.
 func (n *Node) bcastAppend() {
-	for _, peer := range n.peers {
+	for _, peer := range n.peers() {
 		n.sendAppend(peer)
 	}
 }
@@ -579,7 +735,7 @@ func (n *Node) handleRequestVoteResp(m Message) {
 		return
 	}
 	n.votes[m.From] = m.VoteGranted
-	if n.grantedVotes() >= n.quorum() {
+	if n.hasVoteQuorum() {
 		n.becomeLeader()
 	}
 }
@@ -605,6 +761,8 @@ func (n *Node) handleAppendEntries(m Message) {
 		})
 		return
 	}
+
+	n.applyConfFromLog()
 
 	// Rule 5. min(LeaderCommit, last new entry), NOT LeaderCommit alone: the
 	// leader may have committed entries this follower has not received yet,
@@ -681,15 +839,12 @@ func (n *Node) maybeCommit() bool {
 	// map iteration order is randomised, and while sorting would erase the
 	// difference here, ranging maps for anything order-sensitive is the habit
 	// that breaks determinism elsewhere.
-	matches := make([]Index, 0, len(n.peers)+1)
-	matches = append(matches, n.matchIndex[n.id])
-	for _, p := range n.peers {
-		matches = append(matches, n.matchIndex[p])
-	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i] > matches[j] })
-
-	// The quorum-th largest is the highest index a majority has reached.
-	candidate := matches[n.quorum()-1]
+	candidate := n.cfg.committedIndex(func(id NodeID) Index {
+		if id == n.id {
+			return n.matchIndex[n.id]
+		}
+		return n.matchIndex[id]
+	})
 	if candidate <= n.log.committed {
 		return false
 	}
@@ -698,6 +853,15 @@ func (n *Node) maybeCommit() bool {
 	}
 
 	n.log.commitTo(candidate)
+
+	// The joint configuration is committed, so C_new is now safe to adopt.
+	// Doing this automatically means a caller makes one ProposeConfChange call
+	// and the two-phase transition completes on its own.
+	if n.cfg.isJoint() && n.jointEntryCommitted() {
+		n.leaveJoint()
+		return true
+	}
+
 	// Followers learn of the new commit index on the next AppendEntries.
 	n.bcastAppend()
 	return true
@@ -769,12 +933,8 @@ func (n *Node) CreateSnapshot(index Index, data []byte) (*Snapshot, error) {
 		return nil, ErrSnapshotCompacted
 	}
 
-	voters := make([]NodeID, 0, len(n.peers)+1)
-	voters = append(voters, n.id)
-	voters = append(voters, n.peers...)
-
 	snap := &Snapshot{
-		Metadata: SnapshotMetadata{Index: index, Term: term, Voters: voters},
+		Metadata: SnapshotMetadata{Index: index, Term: term, Voters: n.cfg.voters},
 		Data:     data,
 	}
 	n.log.compact(index, term)
@@ -793,16 +953,10 @@ func (n *Node) FirstIndex() Index { return n.log.firstIndex() }
 // LastIndex is the newest entry in the log.
 func (n *Node) LastIndex() Index { return n.log.lastIndex() }
 
-// applyVoters replaces the peer set, excluding ourselves.
+// applyVoters replaces membership from a snapshot.
 func (n *Node) applyVoters(voters []NodeID) {
-	peers := make([]NodeID, 0, len(voters))
-	for _, v := range voters {
-		if v != n.id {
-			peers = append(peers, v)
-		}
-	}
-	sortNodeIDs(peers)
-	n.peers = peers
+	n.cfg = newConfig(voters)
+	n.bootstrapCfg = n.cfg
 }
 
 // sortNodeIDs keeps peer order deterministic. Insertion sort: the slice is
@@ -827,7 +981,13 @@ func sortNodeIDs(ids []NodeID) {
 //
 // Majority rather than unanimity because any two majorities share a member, and
 // that shared member is what makes two leaders in one term impossible.
-func (n *Node) quorum() int { return (len(n.peers)+1)/2 + 1 }
+func (n *Node) quorum() int { return len(n.cfg.voters)/2 + 1 }
+
+// hasVoteQuorum reports whether the granted votes form a majority of every
+// active configuration.
+func (n *Node) hasVoteQuorum() bool {
+	return n.cfg.hasQuorum(func(id NodeID) bool { return n.votes[id] })
+}
 
 // grantedVotes counts grants, not replies. n.votes stores refusals as false so
 // a retried response stays idempotent, so len(n.votes) is a different number

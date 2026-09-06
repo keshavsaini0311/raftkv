@@ -212,8 +212,12 @@ func (c *Cluster) handleReady(n *simNode) {
 	for _, e := range rd.CommittedEntries {
 		n.applied = append(n.applied, e)
 		n.appliedIdx = e.Index
-		if len(e.Data) == 0 {
-			continue // election no-op
+		if e.Type != raft.EntryNormal || len(e.Data) == 0 {
+			// Election no-ops and configuration entries are raft's own
+			// bookkeeping. Feeding them to the state machine would fail to
+			// decode, and on every replica identically — a consistent
+			// corruption is still a corruption.
+			continue
 		}
 		res := n.kv.Apply(e.Data)
 		if p, ok := c.pending[n.id][e.Index]; ok {

@@ -196,10 +196,10 @@ func TestSnapshotRestoresMembership(t *testing.T) {
 	}
 	_ = f.Step(Message{Type: MsgInstallSnapshot, From: 1, To: 2, Term: 5, Snapshot: snap})
 
-	if len(f.peers) != 4 {
-		t.Fatalf("peers = %v, want 4 (the cluster grew to 5 while we were away)", f.peers)
+	if len(f.peers()) != 4 {
+		t.Fatalf("peers = %v, want 4 (the cluster grew to 5 while we were away)", f.peers())
 	}
-	for _, p := range f.peers {
+	for _, p := range f.peers() {
 		if p == 2 {
 			t.Error("the node listed itself as its own peer")
 		}

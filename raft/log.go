@@ -81,6 +81,15 @@ func (l *raftLog) term(i Index) (Term, bool) {
 	return l.entries[i-base].Term, true
 }
 
+// at returns the entry at index i.
+func (l *raftLog) at(i Index) (Entry, bool) {
+	base := l.compactedIndex()
+	if i <= base || i > l.lastIndex() {
+		return Entry{}, false
+	}
+	return l.entries[i-base], true
+}
+
 // matches reports whether the log contains an entry at index i whose term is t.
 // This is the AppendEntries consistency check: if it holds, the two logs are
 // identical in every entry up to i (Log Matching Property, §5.3).

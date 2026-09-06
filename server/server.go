@@ -314,8 +314,10 @@ func (s *Server) handleReady() {
 
 	// --- 3. APPLY ---------------------------------------------------------
 	for _, e := range rd.CommittedEntries {
-		if len(e.Data) == 0 {
-			continue // the no-op appended on election
+		if e.Type != raft.EntryNormal || len(e.Data) == 0 {
+			// Election no-ops and configuration entries are raft's own
+			// bookkeeping, not client commands.
+			continue
 		}
 		res := s.kv.Apply(e.Data)
 		if w, ok := s.waiters[e.Index]; ok {
