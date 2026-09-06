@@ -96,6 +96,9 @@ type Cluster struct {
 	Snapshots          int
 	SnapshotsInstalled int
 
+	trace       *Trace
+	pendingNote string
+
 	// ProposalsLost counts writes whose entry was truncated by a new leader.
 	// Expected to be non-zero under chaos: it is a normal Raft outcome, and
 	// the client is correctly told nothing rather than told it succeeded.
@@ -174,6 +177,8 @@ func (c *Cluster) Tick() {
 			c.handleReady(c.nodes[id])
 		}
 	}
+
+	c.recordFrame()
 }
 
 // RunTicks advances the cluster.
@@ -207,6 +212,11 @@ func (c *Cluster) handleReady(n *simNode) {
 
 	for _, m := range rd.Messages {
 		c.net.send(c.now, m)
+		if c.trace != nil {
+			c.trace.pending = append(c.trace.pending, MsgFrame{
+				From: m.From, To: m.To, Type: m.Type.String(),
+			})
+		}
 	}
 
 	for _, e := range rd.CommittedEntries {

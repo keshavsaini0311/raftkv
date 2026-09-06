@@ -152,7 +152,7 @@ Current numbers:
 | `sim/` | 1,120 | 572 | 93.8% |
 | `server/` | 920 | 380 | 68.4% |
 
-**70 tests.** Several exist only because *mutation testing* showed the suite
+**72 tests.** Several exist only because *mutation testing* showed the suite
 missed them — deleting the votes-map reset, clearing `votedFor` on every
 stepdown, or dropping the post-election heartbeat each broke **no test at all**,
 despite each being a documented path to two leaders in one term.
@@ -204,7 +204,7 @@ if you are building something similar.
 | 3 | KV state machine, client sessions, ReadIndex linearizable reads | ✅ |
 | 4 | Deterministic simulator + Porcupine linearizability | ✅ |
 | 5 | Snapshots, log compaction, joint-consensus membership changes | ✅ |
-| 6 | Benchmarks ✅ · live visualizer ❌ | partial |
+| 6 | Benchmarks ✅ · replay trace ✅ · visualizer page ❌ | partial |
 
 ---
 

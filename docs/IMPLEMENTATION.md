@@ -477,8 +477,17 @@ That command produces the identical run every time, on any machine, forever.
 
 Stated plainly rather than left to be discovered:
 
-- **No live visualizer** (milestone 6). Benchmarks exist; the real-time view of
-  election and partition healing does not.
+- **The visualizer page is not written** (milestone 6). The data layer is:
+  `sim.Cluster.EnableTrace()` records a replayable, deterministic trace — per
+  tick, every node's role, term, log length, commit index and crash state, plus
+  the messages on the wire, the partition groups, and annotated events. 300
+  ticks of a 5-node chaos run is ~137 KB of JSON. What is missing is only the
+  page that renders it.
+
+  The trace deliberately records what an OBSERVER could see rather than node
+  internals: a visualisation that reached inside `Node` would be showing the
+  implementation instead of the algorithm, and would break every time the
+  implementation changed.
 - **Leadership transfer is not implemented.** A leader cannot remove itself, so
   the nemesis never proposes that change. Removing the current leader requires
   waiting for it to step down naturally.

@@ -983,6 +983,9 @@ func (n *Node) CreateSnapshot(index Index, data []byte) (*Snapshot, error) {
 // the highest index a snapshot may cover.
 func (n *Node) AppliedIndex() Index { return n.log.applied }
 
+// CommitIndex is the highest index known to be replicated on a majority.
+func (n *Node) CommitIndex() Index { return n.log.committed }
+
 // FirstIndex is the oldest entry still in the log; everything below it lives in
 // a snapshot.
 func (n *Node) FirstIndex() Index { return n.log.firstIndex() }
