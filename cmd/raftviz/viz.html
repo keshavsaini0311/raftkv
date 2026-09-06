@@ -1,0 +1,909 @@
+<style>
+  :root {
+    --ground:   #0E1420;
+    --panel:    #151D2B;
+    --raised:   #1B2536;
+    --line:     #22304A;
+    --ink:      #C9D4E5;
+    --ink-dim:  #6F8098;
+    --ink-faint:#465872;
+
+    --follower: #6B8CAE;
+    --candidate:#D9A441;
+    --leader:   #3FBFA8;
+    --down:     #C05B5B;
+    --snapshot: #8B7BC7;
+
+    --glow: 0 0 0 1px rgba(63,191,168,.25), 0 0 22px -6px rgba(63,191,168,.55);
+
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ground:   #EDF0F5;
+      --panel:    #FFFFFF;
+      --raised:   #F5F7FA;
+      --line:     #D2DAE6;
+      --ink:      #16202F;
+      --ink-dim:  #5C6D85;
+      --ink-faint:#93A2B5;
+
+      --follower: #3E6392;
+      --candidate:#9C6B1E;
+      --leader:   #14806D;
+      --down:     #A63F3E;
+      --snapshot: #6B57AF;
+
+      --glow: 0 0 0 1px rgba(20,128,109,.3), 0 1px 14px -6px rgba(20,128,109,.5);
+    }
+  }
+
+  :root[data-theme="light"] {
+    --ground:#EDF0F5; --panel:#FFFFFF; --raised:#F5F7FA; --line:#D2DAE6;
+    --ink:#16202F; --ink-dim:#5C6D85; --ink-faint:#93A2B5;
+    --follower:#3E6392; --candidate:#9C6B1E; --leader:#14806D;
+    --down:#A63F3E; --snapshot:#6B57AF;
+    --glow: 0 0 0 1px rgba(20,128,109,.3), 0 1px 14px -6px rgba(20,128,109,.5);
+  }
+  :root[data-theme="dark"] {
+    --ground:#0E1420; --panel:#151D2B; --raised:#1B2536; --line:#22304A;
+    --ink:#C9D4E5; --ink-dim:#6F8098; --ink-faint:#465872;
+    --follower:#6B8CAE; --candidate:#D9A441; --leader:#3FBFA8;
+    --down:#C05B5B; --snapshot:#8B7BC7;
+    --glow: 0 0 0 1px rgba(63,191,168,.25), 0 0 22px -6px rgba(63,191,168,.55);
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+    padding: clamp(12px, 2.5vw, 28px);
+    max-width: 1280px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* ---- header -------------------------------------------------------- */
+
+  .masthead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 18px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .wordmark {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: .01em;
+    margin: 0;
+  }
+  .wordmark span { color: var(--ink-dim); font-weight: 400; }
+  .blurb {
+    font-family: var(--sans);
+    color: var(--ink-dim);
+    flex: 1 1 320px;
+    min-width: 0;
+    font-size: 12.5px;
+  }
+  .facts { display: flex; gap: 14px; color: var(--ink-dim); font-size: 11.5px; }
+  .facts b { color: var(--ink); font-weight: 500; }
+
+  /* ---- transport ----------------------------------------------------- */
+
+  .transport {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 9px 12px;
+  }
+  .transport button, .transport select {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink);
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    padding: 4px 9px;
+    cursor: pointer;
+  }
+  .transport button:hover, .transport select:hover { border-color: var(--ink-faint); }
+  .transport button:focus-visible, .transport select:focus-visible,
+  .scrub:focus-visible, .evlist li:focus-visible {
+    outline: 2px solid var(--leader);
+    outline-offset: 1px;
+  }
+  #play { min-width: 74px; color: var(--leader); border-color: var(--leader); }
+
+  .clock { color: var(--ink-dim); white-space: nowrap; }
+  .clock b { color: var(--ink); font-weight: 500; }
+
+  .scrub {
+    flex: 1 1 260px;
+    min-width: 160px;
+    accent-color: var(--leader);
+    height: 20px;
+  }
+
+  /* ---- main grid ----------------------------------------------------- */
+
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    gap: 14px;
+  }
+  .stage > .cluster { grid-row: 1 / span 2; }
+  @media (max-width: 760px) {
+    .stage { grid-template-columns: minmax(0, 1fr); }
+    .stage > .cluster { grid-row: auto; }
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 12px 14px 14px;
+    min-width: 0;
+  }
+  .card > h2 {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin: 0 0 10px;
+  }
+
+  #ring { display: block; width: 100%; height: auto; margin: 0 auto; }
+
+  .cluster { display: flex; flex-direction: column; }
+  .cluster .legend { margin-top: auto; }
+
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    gap: 8px;
+    margin: 16px 0 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .strip div { min-width: 0; }
+  .strip dt {
+    font-size: 9.5px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .strip dd { margin: 2px 0 0; font-size: 13px; color: var(--accent, var(--ink)); }
+
+  .now-event {
+    margin: 10px 0 0;
+    min-height: 1.5em;
+    font-size: 12px;
+    color: var(--ink-dim);
+  }
+  .now-event.fresh { color: var(--ink); }
+  .now-event .marker { color: var(--leader); margin-right: 6px; }
+
+  /* ---- readout ------------------------------------------------------- */
+
+  .readout { display: flex; flex-direction: column; gap: 7px; }
+  .node-row {
+    display: grid;
+    grid-template-columns: 30px 74px 42px 1fr;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 8px;
+    border-radius: 2px;
+    background: var(--raised);
+    border-left: 2px solid var(--role);
+  }
+  .node-row.is-down { opacity: .5; }
+  .node-row .nid { color: var(--ink-dim); }
+  .node-row .role { color: var(--role); font-size: 11px; letter-spacing: .04em; }
+  .node-row .term { color: var(--ink-dim); font-size: 11px; }
+  .node-row .term b { color: var(--ink); font-weight: 500; }
+
+  .logbar { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .track {
+    flex: 1;
+    height: 7px;
+    background: color-mix(in srgb, var(--ink-faint) 30%, transparent);
+    border-radius: 1px;
+    overflow: hidden;
+    position: relative;
+    min-width: 24px;
+  }
+  .track i { position: absolute; inset: 0 auto 0 0; display: block; }
+  .track .uncommitted { background: color-mix(in srgb, var(--role) 32%, transparent); }
+  .track .committed   { background: var(--role); }
+  .counts { color: var(--ink-dim); font-size: 11px; white-space: nowrap; }
+  .counts b { color: var(--ink); font-weight: 500; }
+
+  .tag {
+    font-size: 9.5px;
+    letter-spacing: .1em;
+    padding: 1px 4px;
+    border-radius: 2px;
+    border: 1px solid currentColor;
+  }
+  .tag-out { color: var(--ink-faint); }
+  .tag-down { color: var(--down); }
+
+  /* ---- legend -------------------------------------------------------- */
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-dim);
+    font-size: 11px;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+  .legend .wire i { width: 14px; height: 2px; border-radius: 0; }
+
+  /* ---- timeline ------------------------------------------------------ */
+
+  .tl-wrap { position: relative; cursor: crosshair; }
+  #timeline { display: block; width: 100%; }
+  #head {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: var(--ink);
+    pointer-events: none;
+  }
+  #head::before {
+    content: "";
+    position: absolute;
+    top: -1px; left: -3px;
+    border: 3.5px solid transparent;
+    border-top-color: var(--ink);
+  }
+  .tl-axis {
+    display: flex;
+    justify-content: space-between;
+    color: var(--ink-faint);
+    font-size: 10.5px;
+    margin-top: 4px;
+    padding-left: 26px; /* clears the canvas label gutter */
+  }
+
+  /* ---- events -------------------------------------------------------- */
+
+  .stage > .card:last-child { display: flex; flex-direction: column; }
+
+  .evlist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    flex: 1;
+    min-height: 130px;
+    max-height: 340px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .evlist li {
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    gap: 10px;
+    padding: 3px 6px;
+    border-radius: 2px;
+    cursor: pointer;
+    color: var(--ink-dim);
+  }
+  .evlist li:hover { background: var(--raised); }
+  .evlist li .at { color: var(--ink-faint); }
+  .evlist li.past { color: var(--ink); }
+  .evlist li.now {
+    background: var(--raised);
+    color: var(--ink);
+    box-shadow: inset 2px 0 0 var(--leader);
+  }
+  .evlist em { font-style: normal; color: var(--role, var(--ink)); }
+
+  footer {
+    color: var(--ink-faint);
+    font-size: 11px;
+    font-family: var(--sans);
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+  footer code { font-family: var(--mono); color: var(--ink-dim); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<header class="masthead">
+  <h1 class="wordmark">raftkv <span>· consensus replay</span></h1>
+  <p class="blurb">A recorded run of the simulator, frame by frame. Everything here is what an outside
+    observer could see — roles, terms, log lengths, messages on the wire — never a node's internals.</p>
+  <div class="facts">
+    <span>seed <b id="f-seed"></b></span>
+    <span>nodes <b id="f-nodes"></b></span>
+    <span>ticks <b id="f-ticks"></b></span>
+  </div>
+</header>
+
+<div class="transport">
+  <button id="first" title="Start (Home)">|&lt;</button>
+  <button id="back" title="Back one tick (←)">&lt;</button>
+  <button id="play" title="Play / pause (Space)">play</button>
+  <button id="fwd" title="Forward one tick (→)">&gt;</button>
+  <button id="last" title="End (End)">&gt;|</button>
+  <select id="speed" title="Playback speed" aria-label="Playback speed">
+    <option value="0.5">0.5&times;</option>
+    <option value="1" selected>1&times;</option>
+    <option value="2">2&times;</option>
+    <option value="4">4&times;</option>
+  </select>
+  <span class="clock">t <b id="clock">0</b> / <span id="clock-max">0</span></span>
+  <input class="scrub" id="scrub" type="range" min="0" value="0" step="1" aria-label="Scrub timeline">
+  <button id="theme" title="Toggle light / dark">◐</button>
+</div>
+
+<div class="stage">
+  <section class="card cluster">
+    <h2>Cluster</h2>
+    <svg id="ring" viewBox="0 0 420 340" role="img" aria-label="Cluster topology"></svg>
+    <dl class="strip">
+      <div><dt>leader</dt><dd id="s-leader">—</dd></div>
+      <div><dt>term</dt><dd id="s-term">—</dd></div>
+      <div><dt>committed</dt><dd id="s-commit">—</dd></div>
+      <div><dt>network</dt><dd id="s-net">—</dd></div>
+    </dl>
+    <p class="now-event" id="s-event"></p>
+
+    <div class="legend">
+      <span style="color:var(--follower)"><i></i>follower</span>
+      <span style="color:var(--candidate)"><i></i>candidate</span>
+      <span style="color:var(--leader)"><i></i>leader</span>
+      <span style="color:var(--down)"><i></i>crashed</span>
+      <span class="wire" style="color:var(--candidate)"><i></i>vote</span>
+      <span class="wire" style="color:var(--leader)"><i></i>append</span>
+      <span class="wire" style="color:var(--snapshot)"><i></i>snapshot</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Replicas</h2>
+    <div class="readout" id="readout"></div>
+    <div class="legend">
+      <span>bar = log length, filled portion = committed</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Events</h2>
+    <ol class="evlist" id="events"></ol>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Roles over time</h2>
+  <div class="tl-wrap" id="tl-wrap">
+    <canvas id="timeline"></canvas>
+    <div id="head"></div>
+  </div>
+  <div class="tl-axis"><span>t 0</span><span id="ax-mid"></span><span id="ax-end"></span></div>
+</section>
+
+<footer>
+  Generated by <code>go run ./cmd/raftviz -seed &lt;n&gt;</code>. The same seed produces the same run,
+  byte for byte — the trace is a replay, not a recording of one lucky execution.
+</footer>
+
+<script>
+const TRACE = __TRACE__;
+const FRAMES = TRACE.frames;
+const IDS = TRACE.nodes;
+const LAST = FRAMES.length - 1;
+
+// Token lookups are cached. getComputedStyle forces a style recalculation, and
+// a frame asks for a colour dozens of times; uncached, scrubbing stutters.
+// The cache is cleared whenever the theme changes, which is the only time the
+// answers can differ.
+let tokens = new Map();
+const css = n => {
+  let v = tokens.get(n);
+  if (v === undefined) {
+    v = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    tokens.set(n, v);
+  }
+  return v;
+};
+const forgetTokens = () => tokens.clear();
+const roleVar = r => r === "Leader" ? "--leader" : r === "Candidate" ? "--candidate" : "--follower";
+
+// Message colour follows what the message is FOR, not who sent it: votes are an
+// election, appends are replication, snapshots are catch-up. Responses share the
+// hue of the request they answer so a round trip reads as one exchange.
+function wireVar(t) {
+  if (t.startsWith("RequestVote")) return "--candidate";
+  if (t.startsWith("InstallSnapshot")) return "--snapshot";
+  return "--leader";
+}
+
+/* ---- geometry ------------------------------------------------------- */
+
+const CX = 210, CY = 162, R = 112, NR = 25;
+const POS = IDS.map((id, k) => {
+  const a = -Math.PI / 2 + (2 * Math.PI * k) / IDS.length;
+  return { id, x: CX + R * Math.cos(a), y: CY + R * Math.sin(a) };
+});
+const posOf = id => POS[IDS.indexOf(id)];
+
+const SVG = "http://www.w3.org/2000/svg";
+const el = (tag, attrs) => {
+  const n = document.createElementNS(SVG, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  return n;
+};
+
+const ring = document.getElementById("ring");
+const linkLayer = el("g", {});
+const wireLayer = el("g", {});
+const nodeLayer = el("g", {});
+const defs = el("defs", {});
+ring.append(defs, linkLayer, wireLayer, nodeLayer);
+
+// One arrowhead marker per wire colour. Markers cannot inherit currentColor
+// across a <use>, so each hue needs its own.
+for (const v of ["--candidate", "--leader", "--snapshot"]) {
+  const m = el("marker", {
+    id: "ah" + v, viewBox: "0 0 8 8", refX: "7", refY: "4",
+    markerWidth: "5", markerHeight: "5", orient: "auto-start-reverse",
+  });
+  const p = el("path", { d: "M0,0 L8,4 L0,8 z" });
+  p.dataset.var = v;
+  m.append(p);
+  defs.append(m);
+}
+
+// Static peer links, drawn once. Only their opacity changes per frame.
+const links = [];
+for (let a = 0; a < POS.length; a++) {
+  for (let b = a + 1; b < POS.length; b++) {
+    const l = el("line", {
+      x1: POS[a].x, y1: POS[a].y, x2: POS[b].x, y2: POS[b].y,
+      "stroke-width": 1,
+    });
+    links.push({ line: l, a: POS[a].id, b: POS[b].id });
+    linkLayer.append(l);
+  }
+}
+
+// Node glyphs, also built once: a frame updates attributes rather than
+// rebuilding the DOM, so scrubbing at speed does not thrash the layout.
+const glyphs = POS.map(p => {
+  const g = el("g", {});
+  const halo = el("circle", { cx: p.x, cy: p.y, r: NR + 6, fill: "none", "stroke-width": 1 });
+  const disc = el("circle", { cx: p.x, cy: p.y, r: NR, "stroke-width": 1.5 });
+  const name = el("text", {
+    x: p.x, y: p.y - 1, "text-anchor": "middle", "font-size": 13,
+    "font-family": "var(--mono)", "font-weight": 600,
+  });
+  name.textContent = "n" + p.id;
+  const term = el("text", {
+    x: p.x, y: p.y + 12, "text-anchor": "middle", "font-size": 9.5,
+    "font-family": "var(--mono)",
+  });
+  g.append(halo, disc, name, term);
+  nodeLayer.append(g);
+  return { halo, disc, name, term };
+});
+
+/* ---- per-frame render ----------------------------------------------- */
+
+// groupOf maps a node to its partition group index; nodes in different groups
+// cannot exchange messages this tick.
+function groupOf(f) {
+  const m = new Map();
+  if (!f.g) { for (const id of IDS) m.set(id, 0); return m; }
+  f.g.forEach((grp, i) => grp.forEach(id => m.set(id, i)));
+  return m;
+}
+
+function drawRing(f) {
+  const grp = groupOf(f);
+  const down = new Set(f.n.filter(n => n.x).map(n => n.i));
+
+  for (const { line, a, b } of links) {
+    const cut = grp.get(a) !== grp.get(b);
+    const dead = down.has(a) || down.has(b);
+    line.setAttribute("stroke", css(cut ? "--down" : "--ink-faint"));
+    line.setAttribute("stroke-opacity", cut ? 0.28 : dead ? 0.12 : 0.35);
+    line.setAttribute("stroke-dasharray", cut ? "3 5" : "");
+  }
+
+  f.n.forEach((n, k) => {
+    const { halo, disc, name, term } = glyphs[k];
+    const c = css(n.x ? "--down" : roleVar(n.r));
+    disc.setAttribute("stroke", c);
+    disc.setAttribute("fill", c);
+    disc.setAttribute("fill-opacity", n.x ? 0.05 : 0.13);
+    disc.setAttribute("stroke-dasharray", n.x ? "3 3" : "");
+    disc.setAttribute("stroke-width", n.r === "Leader" && !n.x ? 2.5 : 1.5);
+    disc.setAttribute("opacity", n.x ? 0.55 : 1);
+
+    // A node removed from the configuration is still running — the dotted halo
+    // says "present but not counted", which is exactly the state that makes
+    // membership changes confusing without a picture.
+    halo.setAttribute("stroke", css("--ink-faint"));
+    halo.setAttribute("stroke-dasharray", "2 4");
+    halo.setAttribute("stroke-opacity", n.v ? 0 : 0.75);
+
+    name.setAttribute("fill", css(n.x ? "--ink-faint" : "--ink"));
+    term.setAttribute("fill", css("--ink-dim"));
+    term.textContent = n.x ? "down" : "t" + n.t;
+  });
+
+  wireLayer.replaceChildren();
+  for (const m of f.m || []) {
+    const from = posOf(m.f), to = posOf(m.o);
+    if (!from || !to) continue;
+    const v = wireVar(m.t);
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // Stop short of both discs so the arrowhead lands on the rim, not under it.
+    const ux = dx / len, uy = dy / len, pad = NR + 4;
+    const line = el("line", {
+      x1: from.x + ux * pad, y1: from.y + uy * pad,
+      x2: to.x - ux * pad, y2: to.y - uy * pad,
+      stroke: css(v), "stroke-width": 1.6, "stroke-opacity": 0.9,
+      "marker-end": `url(#ah${v})`,
+    });
+    wireLayer.append(line);
+  }
+  // Markers are separate elements; recolour them alongside the lines.
+  defs.querySelectorAll("path[data-var]").forEach(p => p.setAttribute("fill", css(p.dataset.var)));
+}
+
+const readout = document.getElementById("readout");
+const rows = IDS.map(() => {
+  const row = document.createElement("div");
+  row.className = "node-row";
+  row.innerHTML = `<span class="nid"></span><span class="role"></span>` +
+    `<span class="term">t<b></b></span>` +
+    `<span class="logbar"><span class="track"><i class="uncommitted"></i><i class="committed"></i></span>` +
+    `<span class="counts"><b></b>/<span></span></span></span>`;
+  readout.append(row);
+  return {
+    row,
+    nid: row.querySelector(".nid"),
+    role: row.querySelector(".role"),
+    term: row.querySelector(".term b"),
+    unc: row.querySelector(".uncommitted"),
+    com: row.querySelector(".committed"),
+    commit: row.querySelector(".counts b"),
+    log: row.querySelector(".counts span"),
+  };
+});
+
+function drawReadout(f) {
+  // Bars share one scale so they are comparable across replicas — a follower
+  // that is behind should LOOK behind, which a per-row scale would hide.
+  const max = Math.max(1, ...f.n.map(n => n.l));
+  f.n.forEach((n, k) => {
+    const r = rows[k];
+    r.row.style.setProperty("--role", `var(${n.x ? "--down" : roleVar(n.r)})`);
+    r.row.classList.toggle("is-down", !!n.x);
+    r.nid.textContent = "n" + n.i;
+    r.role.innerHTML = n.x
+      ? `<span class="tag tag-down">DOWN</span>`
+      : n.r.toLowerCase() + (n.v ? "" : ` <span class="tag tag-out">OUT</span>`);
+    r.term.textContent = n.t;
+    r.unc.style.width = (100 * n.l / max) + "%";
+    r.com.style.width = (100 * n.c / max) + "%";
+    r.commit.textContent = n.c;
+    r.log.textContent = n.l;
+  });
+}
+
+/* ---- timeline ------------------------------------------------------- */
+
+const strip = {
+  leader: document.getElementById("s-leader"),
+  term: document.getElementById("s-term"),
+  commit: document.getElementById("s-commit"),
+  net: document.getElementById("s-net"),
+  event: document.getElementById("s-event"),
+};
+
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+// drawStrip answers the three questions a still frame otherwise leaves open:
+// who leads, how far the cluster has agreed, and whether the network is whole.
+function drawStrip(f, i) {
+  // The leader with the HIGHEST term. Two leaders in different terms is normal
+  // mid-transition; two in the SAME term would be a safety violation, and the
+  // strip says so rather than quietly picking one.
+  const leaders = f.n.filter(n => !n.x && n.r === "Leader");
+  const top = leaders.reduce((a, b) => (!a || b.t > a.t ? b : a), null);
+  const split = leaders.filter(n => top && n.t === top.t).length > 1;
+
+  strip.leader.textContent = split ? "SPLIT BRAIN" : top ? "n" + top.i : "none";
+  strip.leader.style.setProperty("--accent",
+    split ? "var(--down)" : top ? "var(--leader)" : "var(--ink-dim)");
+
+  const terms = f.n.filter(n => !n.x).map(n => n.t);
+  strip.term.textContent = terms.length
+    ? (Math.min(...terms) === Math.max(...terms)
+        ? Math.max(...terms)
+        : Math.min(...terms) + "–" + Math.max(...terms))
+    : "—";
+
+  // The committed index every live replica agrees on: the real durable point,
+  // which is the minimum, not the leader's own.
+  const commits = f.n.filter(n => !n.x).map(n => n.c);
+  strip.commit.textContent = commits.length ? Math.min(...commits) : "—";
+
+  const live = f.n.filter(n => !n.x).length;
+  const partitioned = f.g && f.g.length > 1;
+  strip.net.textContent = partitioned
+    ? f.g.length + "-way split"
+    : live < f.n.length ? live + "/" + f.n.length + " up" : "whole";
+  strip.net.style.setProperty("--accent",
+    partitioned || live < f.n.length ? "var(--candidate)" : "var(--ink)");
+
+  // Carry the last event forward when this tick has none, so a paused frame
+  // still explains itself instead of going blank between events.
+  let back = i;
+  while (back > 0 && !FRAMES[back].e) back--;
+  const ev = FRAMES[back].e;
+  strip.event.classList.toggle("fresh", back === i);
+  strip.event.innerHTML = ev
+    ? `<span class="marker">${back === i ? "▸" : "·"}</span>t${FRAMES[back].t} ${esc(ev)}`
+    : "";
+}
+
+const canvas = document.getElementById("timeline");
+const ctx = canvas.getContext("2d");
+const ROW_H = 15, GAP = 3, LANE_H = 7;
+
+// stateOf collapses a node's frame to the one thing the band encodes.
+const stateOf = n => n.x ? "down" : n.r;
+
+// paintRuns merges adjacent identical states into single rectangles.
+//
+// Drawing one rect per frame looked right and was not: at fractional column
+// widths the rects must overlap to avoid seams, and overlapping translucent
+// fills double-blend into visible stripes. Runs remove the overlap entirely —
+// and 700 frames become a few dozen rects.
+function paintRuns(y, h, w, valueAt, styleFor) {
+  const cw = w / FRAMES.length;
+  let start = 0;
+  for (let i = 1; i <= FRAMES.length; i++) {
+    const v = i < FRAMES.length ? valueAt(i) : null;
+    if (i < FRAMES.length && v === valueAt(start)) continue;
+    const s = styleFor(valueAt(start));
+    if (s) {
+      ctx.fillStyle = s;
+      ctx.fillRect(Math.floor(start * cw), y, Math.ceil((i - start) * cw), h);
+    }
+    start = i;
+  }
+}
+
+const GUTTER = 26;
+
+function paintTimeline() {
+  const w = canvas.clientWidth;
+  if (!w) return;
+  const h = IDS.length * (ROW_H + GAP) + LANE_H + 6;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.height = h + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const bandW = w - GUTTER;
+  const fill = {
+    Leader: css("--leader"),
+    Candidate: css("--candidate"),
+    Follower: css("--follower"),
+    down: css("--down"),
+  };
+
+  ctx.save();
+  ctx.translate(GUTTER, 0);
+  IDS.forEach((id, k) => {
+    const y = k * (ROW_H + GAP);
+    // Followers sit back so leaders and candidates carry the eye: the question
+    // a role band answers is "who led, and when did that change".
+    ctx.globalAlpha = 1;
+    paintRuns(y, ROW_H, bandW, i => stateOf(FRAMES[i].n[k]), s => {
+      ctx.globalAlpha = s === "Follower" ? 0.34 : s === "down" ? 0.5 : 0.95;
+      return fill[s];
+    });
+  });
+
+  // Partition lane: a band that appears only while the network is split.
+  ctx.globalAlpha = 0.8;
+  paintRuns(IDS.length * (ROW_H + GAP) + 3, LANE_H, bandW,
+    i => !!(FRAMES[i].g && FRAMES[i].g.length > 1),
+    split => split ? fill.down : null);
+  ctx.restore();
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = css("--ink-dim");
+  ctx.font = "10px " + css("--mono");
+  ctx.textBaseline = "middle";
+  IDS.forEach((id, k) => {
+    ctx.fillText("n" + id, 0, k * (ROW_H + GAP) + ROW_H / 2);
+  });
+  ctx.fillStyle = css("--ink-faint");
+  ctx.fillText("net", 0, IDS.length * (ROW_H + GAP) + 3 + LANE_H / 2);
+}
+
+const wrap = document.getElementById("tl-wrap");
+const head = document.getElementById("head");
+new ResizeObserver(paintTimeline).observe(wrap);
+
+// The bands start after the label gutter, so a click maps to a frame through
+// the band's own width — not the canvas's.
+const seekFromEvent = e => {
+  const r = wrap.getBoundingClientRect();
+  seek(Math.round(((e.clientX - r.left - GUTTER) / (r.width - GUTTER)) * LAST));
+};
+wrap.addEventListener("pointerdown", e => {
+  wrap.setPointerCapture(e.pointerId);
+  seekFromEvent(e);
+});
+wrap.addEventListener("pointermove", e => { if (e.buttons) seekFromEvent(e); });
+
+/* ---- events --------------------------------------------------------- */
+
+const evlist = document.getElementById("events");
+const EVENTS = [];
+FRAMES.forEach((f, i) => { if (f.e) EVENTS.push({ i, t: f.t, text: f.e }); });
+
+const evNodes = EVENTS.map(ev => {
+  const li = document.createElement("li");
+  li.tabIndex = 0;
+  li.innerHTML = `<span class="at">t${ev.t}</span><span>${ev.text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>`;
+  li.addEventListener("click", () => seek(ev.i));
+  li.addEventListener("keydown", e => { if (e.key === "Enter") seek(ev.i); });
+  evlist.append(li);
+  return li;
+});
+
+function drawEvents(i) {
+  let current = -1;
+  evNodes.forEach((li, k) => {
+    const past = EVENTS[k].i <= i;
+    li.classList.toggle("past", past);
+    if (past) current = k;
+  });
+  evNodes.forEach((li, k) => li.classList.toggle("now", k === current));
+  if (current >= 0 && !dragging) {
+    evNodes[current].scrollIntoView({ block: "nearest" });
+  }
+}
+
+/* ---- driving -------------------------------------------------------- */
+
+let cur = 0, playing = false, dragging = false, acc = 0, prev = 0;
+const clock = document.getElementById("clock");
+const scrub = document.getElementById("scrub");
+const playBtn = document.getElementById("play");
+
+function render() {
+  const f = FRAMES[cur];
+  drawRing(f);
+  drawReadout(f);
+  drawStrip(f, cur);
+  drawEvents(cur);
+  clock.textContent = f.t;
+  scrub.value = cur;
+  head.style.left = (GUTTER + (LAST ? cur / LAST : 0) * (wrap.clientWidth - GUTTER)) + "px";
+}
+
+// seek is every deliberate move; playback advances cur directly. The URL is
+// only stamped here because browsers throttle history writes, and fourteen a
+// second during playback would trip that limit.
+function seek(i) {
+  cur = Math.max(0, Math.min(LAST, i));
+  history.replaceState(null, "", "#t=" + FRAMES[cur].t);
+  render();
+}
+
+function setPlaying(on) {
+  playing = on;
+  playBtn.textContent = on ? "pause" : "play";
+  if (on) { prev = performance.now(); acc = 0; requestAnimationFrame(step); }
+}
+
+const BASE_TPS = 14;
+function step(now) {
+  if (!playing) return;
+  acc += (now - prev) / 1000;
+  prev = now;
+  const dt = 1 / (BASE_TPS * parseFloat(document.getElementById("speed").value));
+  while (acc >= dt) {
+    acc -= dt;
+    if (cur >= LAST) { setPlaying(false); render(); return; }
+    cur++;
+  }
+  render();
+  requestAnimationFrame(step);
+}
+
+playBtn.addEventListener("click", () => setPlaying(!playing));
+document.getElementById("back").addEventListener("click", () => { setPlaying(false); seek(cur - 1); });
+document.getElementById("fwd").addEventListener("click", () => { setPlaying(false); seek(cur + 1); });
+document.getElementById("first").addEventListener("click", () => { setPlaying(false); seek(0); });
+document.getElementById("last").addEventListener("click", () => { setPlaying(false); seek(LAST); });
+scrub.addEventListener("pointerdown", () => { dragging = true; setPlaying(false); });
+scrub.addEventListener("pointerup", () => { dragging = false; });
+scrub.addEventListener("input", () => seek(+scrub.value));
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+  const jump = e.shiftKey ? 10 : 1;
+  if (e.key === " ") { e.preventDefault(); setPlaying(!playing); }
+  else if (e.key === "ArrowLeft") { setPlaying(false); seek(cur - jump); }
+  else if (e.key === "ArrowRight") { setPlaying(false); seek(cur + jump); }
+  else if (e.key === "Home") { setPlaying(false); seek(0); }
+  else if (e.key === "End") { setPlaying(false); seek(LAST); }
+  else return;
+  e.preventDefault();
+});
+
+// The theme toggle stamps data-theme, which must beat prefers-color-scheme in
+// BOTH directions — hence explicit light and dark blocks rather than one.
+document.getElementById("theme").addEventListener("click", () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const now = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  document.documentElement.dataset.theme = now === "dark" ? "light" : "dark";
+  forgetTokens();
+  paintTimeline();
+  render();
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  forgetTokens();
+  paintTimeline();
+  render();
+});
+
+document.getElementById("f-seed").textContent = TRACE.seed;
+document.getElementById("f-nodes").textContent = IDS.length;
+document.getElementById("f-ticks").textContent = FRAMES.length;
+document.getElementById("clock-max").textContent = FRAMES[LAST].t;
+document.getElementById("ax-mid").textContent = "t " + FRAMES[Math.floor(LAST / 2)].t;
+document.getElementById("ax-end").textContent = "t " + FRAMES[LAST].t;
+scrub.max = LAST;
+
+// #t=350 opens at that tick. Ticks are 1-based and frames are 0-based, so the
+// hash is matched against the recorded t rather than used as an index.
+const wanted = /^#t=(\d+)$/.exec(location.hash);
+if (wanted) {
+  const at = FRAMES.findIndex(f => f.t === +wanted[1]);
+  if (at >= 0) cur = at;
+}
+
+paintTimeline();
+render();
+</script>

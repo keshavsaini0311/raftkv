@@ -1,6 +1,12 @@
 package sim
 
-import "github.com/keshavsaini0311/raftkv/raft"
+import (
+	"fmt"
+	"math/rand"
+	"strings"
+
+	"github.com/keshavsaini0311/raftkv/raft"
+)
 
 // Trace records a run frame by frame so it can be replayed visually.
 //
@@ -53,6 +59,26 @@ func (c *Cluster) EnableTrace() {
 // Trace returns the recording, or nil.
 func (c *Cluster) Trace() *Trace { return c.trace }
 
+// RunTraced drives a recorded run and returns the trace along with the cluster.
+//
+// It repeats Run's tick order exactly — faults, tick, workload — because that
+// order is what the seed replays. A recording made under a different order
+// would be a real run of a different simulator.
+func RunTraced(cfg Config, nemCfg NemesisConfig, wlCfg WorkloadConfig, ticks int) (*Cluster, *Nemesis, *Workload) {
+	c := New(cfg)
+	c.EnableTrace()
+	rng := rand.New(rand.NewSource(cfg.Seed ^ 0x5eed))
+	nem := NewNemesis(nemCfg, rng)
+	wl := NewWorkload(wlCfg, rng)
+
+	for i := 0; i < ticks; i++ {
+		nem.Step(c)
+		c.Tick()
+		wl.Step(c)
+	}
+	return c, nem, wl
+}
+
 // Note records a human-readable event on the next frame — an election, a
 // crash, a partition. These are what make a replay legible: without them a
 // viewer sees colours change and has to infer why.
@@ -87,14 +113,106 @@ func (c *Cluster) recordFrame() {
 		})
 	}
 
-	f := Frame{T: c.now, Nodes: nodes, Msgs: c.trace.pending, Event: c.pendingNote}
+	f := Frame{T: c.now, Nodes: nodes, Msgs: c.trace.pending}
 	if g := c.partitionGroups(); len(g) > 1 {
 		f.Groups = g
 	}
+	f.Event = joinNotes(c.pendingNote, diffEvent(c.lastFrame(), f))
 
 	c.trace.Frames = append(c.trace.Frames, f)
 	c.trace.pending = nil
 	c.pendingNote = ""
+}
+
+func (c *Cluster) lastFrame() *Frame {
+	if n := len(c.trace.Frames); n > 0 {
+		return &c.trace.Frames[n-1]
+	}
+	return nil
+}
+
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + " · " + b
+}
+
+// diffEvent derives what changed between two frames.
+//
+// Deriving beats instrumenting: a Note call in Crash, another in the election
+// path, another in the nemesis, and the annotations drift out of step with the
+// state they describe. A diff of two frames cannot disagree with the frames.
+func diffEvent(prev *Frame, cur Frame) string {
+	if prev == nil {
+		return "cluster starts"
+	}
+
+	var notes []string
+	for i, n := range cur.Nodes {
+		p := prev.Nodes[i] // both are built from c.ids, so indices line up
+
+		switch {
+		case n.Crashed && !p.Crashed:
+			notes = append(notes, fmt.Sprintf("n%d crashed", n.ID))
+		case !n.Crashed && p.Crashed:
+			notes = append(notes, fmt.Sprintf("n%d restarted", n.ID))
+		}
+		if n.Crashed {
+			continue
+		}
+		if n.Role != p.Role && n.Role == "Leader" {
+			notes = append(notes, fmt.Sprintf("n%d elected leader, term %d", n.ID, n.Term))
+		}
+		if n.Voter != p.Voter {
+			verb := "removed from"
+			if n.Voter {
+				verb = "added to"
+			}
+			notes = append(notes, fmt.Sprintf("n%d %s the configuration", n.ID, verb))
+		}
+	}
+
+	switch {
+	case len(cur.Groups) > 1 && !sameGroups(prev.Groups, cur.Groups):
+		notes = append(notes, "network partitioned: "+describeGroups(cur.Groups))
+	case len(cur.Groups) <= 1 && len(prev.Groups) > 1:
+		notes = append(notes, "network healed")
+	}
+
+	return strings.Join(notes, " · ")
+}
+
+func sameGroups(a, b [][]raft.NodeID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if len(a[i]) != len(b[i]) {
+			return false
+		}
+		for j := range a[i] {
+			if a[i][j] != b[i][j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func describeGroups(groups [][]raft.NodeID) string {
+	parts := make([]string, 0, len(groups))
+	for _, g := range groups {
+		ids := make([]string, 0, len(g))
+		for _, id := range g {
+			ids = append(ids, fmt.Sprintf("n%d", id))
+		}
+		parts = append(parts, strings.Join(ids, "+"))
+	}
+	return strings.Join(parts, " | ")
 }
 
 // leaderVoters is the membership as the current leader sees it, so the

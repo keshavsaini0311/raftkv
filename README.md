@@ -4,7 +4,7 @@ A linearizable, fault-tolerant key-value store built on a from-scratch
 implementation of the [Raft consensus algorithm](https://raft.github.io/raft.pdf),
 in Go, with one external dependency.
 
-> **Status:** milestones 1–5 complete; 6 partial (benchmarks yes, visualizer no).
+> **Status:** all six milestones complete.
 > See [the design doc](docs/specs/2026-08-29-raftkv-design.md) and
 > [the implementation notes](docs/IMPLEMENTATION.md).
 
@@ -159,6 +159,34 @@ despite each being a documented path to two leaders in one term.
 
 ---
 
+## Watching it run
+
+```sh
+go run ./cmd/raftviz -seed 42891 -nodes 5 -ticks 700 -out replay.html
+open replay.html
+```
+
+That writes one self-contained file — no server, no CDN, no build step — with
+the whole trace inlined. Scrub the timeline, step tick by tick, watch the ring
+partition and re-form. `#t=286` in the URL opens at that tick.
+
+The same seed produces the same file, byte for byte. That is the point: a
+replay you can send someone alongside a bug report, knowing they will see
+exactly what you saw.
+
+```
+faults:   partitions=8 leader-isolations=3 heals=32 crashes=10 restarts=10 confchanges=1
+network:  sent=5530 delivered=4705 partitioned=817 snapshots=14 installed=1
+clients:  issued=91 completed=87 rejected=23 lost=0
+```
+
+It records only what an **observer** could see — roles, terms, log lengths,
+commit indices, messages on the wire, which links are cut. Never `nextIndex`,
+never the votes map. A picture drawn from internals shows the implementation
+and breaks on every refactor; one drawn from observables shows the algorithm.
+
+---
+
 ## The bug the simulator found
 
 `server/` tracked in-flight client writes by **log index alone**:
@@ -204,7 +232,7 @@ if you are building something similar.
 | 3 | KV state machine, client sessions, ReadIndex linearizable reads | ✅ |
 | 4 | Deterministic simulator + Porcupine linearizability | ✅ |
 | 5 | Snapshots, log compaction, joint-consensus membership changes | ✅ |
-| 6 | Benchmarks ✅ · replay trace ✅ · visualizer page ❌ | partial |
+| 6 | Benchmarks, replay trace, and a self-contained visualizer | ✅ |
 
 ---
 

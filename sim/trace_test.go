@@ -2,6 +2,7 @@ package sim
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -33,8 +34,14 @@ func TestTraceIsRecordedAndDeterministic(t *testing.T) {
 	// It must actually capture activity, not 300 empty frames.
 	var msgs, roles, groups int
 	seenRole := map[string]bool{}
+	events := map[string]int{}
 	for _, f := range tr.Frames {
 		msgs += len(f.Msgs)
+		for _, kind := range []string{"elected leader", "crashed", "restarted", "partitioned", "healed"} {
+			if strings.Contains(f.Event, kind) {
+				events[kind]++
+			}
+		}
 		if len(f.Groups) > 1 {
 			groups++
 		}
@@ -55,6 +62,15 @@ func TestTraceIsRecordedAndDeterministic(t *testing.T) {
 	for _, want := range []string{"Follower", "Leader"} {
 		if !seenRole[want] {
 			t.Errorf("role %q never appeared in the trace", want)
+		}
+	}
+
+	// Events are what make a replay legible: without them a viewer watches
+	// colours change and has to infer why. Each kind is derived by a separate
+	// branch, so each needs to be seen firing at least once.
+	for _, want := range []string{"elected leader", "crashed", "restarted", "partitioned", "healed"} {
+		if events[want] == 0 {
+			t.Errorf("no %q event was ever derived", want)
 		}
 	}
 
