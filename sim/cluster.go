@@ -363,6 +363,68 @@ func (c *Cluster) Read(id raft.NodeID, key string) (*Op, bool) {
 	return op, true
 }
 
+// proposeRandomConfChange removes a member or re-adds a previously removed one.
+//
+// The cluster never shrinks below a size that can still tolerate the nemesis's
+// own crashes: a membership change that leaves the cluster unable to elect
+// anyone makes every subsequent assertion pass by making nothing happen.
+func (c *Cluster) proposeRandomConfChange(rng *rand.Rand) bool {
+	leader := c.Leader()
+	if leader == 0 {
+		return false
+	}
+	n := c.nodes[leader]
+	if n.node.IsJoint() {
+		return false // one transition at a time
+	}
+
+	voters := n.node.Voters()
+	absent := make([]raft.NodeID, 0, len(c.ids))
+	for _, id := range c.ids {
+		if !containsNodeID(voters, id) {
+			absent = append(absent, id)
+		}
+	}
+
+	// Prefer re-adding when someone is out, so the cluster oscillates rather
+	// than shrinking monotonically to one node and staying there.
+	if len(absent) > 0 && rng.Intn(2) == 0 {
+		id := absent[rng.Intn(len(absent))]
+		_, err := n.node.ProposeConfChange(raft.ConfChange{
+			Type: raft.ConfChangeAddNode, NodeID: id,
+		})
+		return err == nil
+	}
+
+	if len(voters) <= 3 {
+		return false // never shrink below a cluster that tolerates one failure
+	}
+	// Never remove the leader itself: leadership transfer is not implemented,
+	// so a leader that removes itself would have to step down mid-transition.
+	candidates := make([]raft.NodeID, 0, len(voters))
+	for _, v := range voters {
+		if v != leader {
+			candidates = append(candidates, v)
+		}
+	}
+	if len(candidates) == 0 {
+		return false
+	}
+	_, err := n.node.ProposeConfChange(raft.ConfChange{
+		Type: raft.ConfChangeRemoveNode, NodeID: candidates[rng.Intn(len(candidates))],
+	})
+	return err == nil
+}
+
+func containsNodeID(ids []raft.NodeID, id raft.NodeID) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
 // Crash stops a node. Volatile state is lost; storage survives.
 func (c *Cluster) Crash(id raft.NodeID) {
 	n := c.nodes[id]

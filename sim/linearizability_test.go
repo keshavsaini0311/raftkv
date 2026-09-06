@@ -306,6 +306,11 @@ func TestLinearizableUnderChaos(t *testing.T) {
 				t.Fatalf("only %d operations recorded; the run was too quiet to prove "+
 					"anything (%s)", len(ops), wl.summary())
 			}
+			// A green run that injected no faults proves nothing. Assert the
+			// nemesis actually did each kind of damage.
+			if nem.Partitions == 0 || nem.Crashes == 0 || nem.ConfChanges == 0 {
+				t.Fatalf("nemesis was too quiet: %s", nem.Summary())
+			}
 
 			res, info := porcupine.CheckOperationsVerbose(registerModel, ops, 30*time.Second)
 			switch res {

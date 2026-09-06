@@ -24,6 +24,12 @@ type NemesisConfig struct {
 	// RestartProb revives a random crashed node from its storage.
 	RestartProb float64
 
+	// ConfChangeProb removes a node and adds it back, exercising membership
+	// changes CONCURRENTLY with partitions and crashes. Membership under
+	// concurrent faults is the combination that found the waiter bug; leaving
+	// it untested would leave the same class of gap open.
+	ConfChangeProb float64
+
 	// MinLive is never violated. Below a quorum the cluster is correctly
 	// unavailable, which is uninteresting to test for long stretches: it makes
 	// every run pass by making nothing happen.
@@ -38,6 +44,7 @@ func Chaos() NemesisConfig {
 		HealProb:          0.040,
 		CrashProb:         0.008,
 		RestartProb:       0.060,
+		ConfChangeProb:    0.004,
 		MinLive:           0, // computed from the cluster size if left at 0
 	}
 }
@@ -59,6 +66,7 @@ type Nemesis struct {
 	Heals           int
 	Crashes         int
 	Restarts        int
+	ConfChanges     int
 	SkippedForQuora int
 }
 
@@ -97,6 +105,12 @@ func (nm *Nemesis) Step(c *Cluster) {
 	if nm.cfg.LeaderIsolateProb > 0 && nm.rng.Float64() < nm.cfg.LeaderIsolateProb {
 		if _, ok := c.IsolateLeader(); ok {
 			nm.LeaderIsolates++
+		}
+	}
+
+	if nm.cfg.ConfChangeProb > 0 && nm.rng.Float64() < nm.cfg.ConfChangeProb {
+		if c.proposeRandomConfChange(nm.rng) {
+			nm.ConfChanges++
 		}
 	}
 
@@ -157,6 +171,7 @@ func (nm *Nemesis) pickCrashed(c *Cluster) (raft.NodeID, bool) {
 // Summary reports what actually happened, so a green run can be checked for
 // having been a real test rather than a quiet one.
 func (nm *Nemesis) Summary() string {
-	return fmt.Sprintf("partitions=%d leader-isolations=%d heals=%d crashes=%d restarts=%d skipped=%d",
-		nm.Partitions, nm.LeaderIsolates, nm.Heals, nm.Crashes, nm.Restarts, nm.SkippedForQuora)
+	return fmt.Sprintf("partitions=%d leader-isolations=%d heals=%d crashes=%d restarts=%d confchanges=%d skipped=%d",
+		nm.Partitions, nm.LeaderIsolates, nm.Heals, nm.Crashes, nm.Restarts,
+		nm.ConfChanges, nm.SkippedForQuora)
 }

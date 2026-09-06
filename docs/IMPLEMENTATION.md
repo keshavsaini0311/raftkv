@@ -435,7 +435,7 @@ shortest failing prefix and a window around the operation that breaks it.
 ## 8. Running everything
 
 ```bash
-go test ./...                                    # all 56 tests
+go test ./...                                    # all 63 tests
 go test -race ./raft/                            # the algorithm
 go test -run Linearizable -v ./sim/              # linearizability, all seeds
 go test -run TestBisectFaults -v ./sim/          # the fault matrix
@@ -462,11 +462,12 @@ Stated plainly rather than left to be discovered:
 
 - **No live visualizer** (milestone 6). Benchmarks exist; the real-time view of
   election and partition healing does not.
-- **Membership changes are not exercised by the simulator.** They are unit
-  tested (7 tests, including the joint-quorum rule and configuration reversion
-  on truncation), but the nemesis does not add or remove nodes mid-run, so
-  membership under concurrent faults is untested — the exact combination that
-  found the `server/` waiter bug.
+- **Leadership transfer is not implemented.** A leader cannot remove itself, so
+  the nemesis never proposes that change. Removing the current leader requires
+  waiting for it to step down naturally.
+- **The simulator never shrinks below three voters.** Below that the cluster
+  cannot tolerate the nemesis's own crashes, and every assertion would pass by
+  making nothing happen.
 - **`server/` has no unit tests.** It is covered end-to-end by
   `scripts/manual-test.sh` and, structurally, by `sim/` exercising the same
   driver contract — but its HTTP layer specifically is only tested by the

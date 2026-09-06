@@ -4,7 +4,7 @@ A linearizable, fault-tolerant key-value store built on a from-scratch
 implementation of the [Raft consensus algorithm](https://raft.github.io/raft.pdf),
 in Go, with one external dependency.
 
-> **Status:** milestones 1–5 implemented and tested.
+> **Status:** milestones 1–5 complete; 6 partial (benchmarks yes, visualizer no).
 > See [the design doc](docs/specs/2026-08-29-raftkv-design.md) and
 > [the implementation notes](docs/IMPLEMENTATION.md).
 
@@ -21,7 +21,7 @@ This repo answers with a number rather than an assertion:
 5 nodes · 4,000 logical ticks · ~33,000 messages
   ~40 network partitions      ~20 leader isolations
   ~30 crash/restart cycles    ~600 dropped, ~600 duplicated messages
-  20-47 log compactions per run
+  20-47 log compactions          3-11 membership changes
 
 → every client history checked linearizable by Porcupine
 → 0.02 seconds per seed, zero flakiness
@@ -152,7 +152,7 @@ Current numbers:
 | `sim/` | 1,120 | 572 | 93.8% |
 | `server/` | 883 | — | covered end-to-end |
 
-**56 tests.** Several exist only because *mutation testing* showed the suite
+**63 tests.** Several exist only because *mutation testing* showed the suite
 missed them — deleting the votes-map reset, clearing `votedFor` on every
 stepdown, or dropping the post-election heartbeat each broke **no test at all**,
 despite each being a documented path to two leaders in one term.
@@ -174,7 +174,7 @@ truncated away.** An acknowledged write that never happened is the worst thing
 a store can do.
 
 It requires partitions **and** crashes together to surface. The 19-assertion
-manual cluster test never saw it. Neither did 56 unit tests. The simulator hit
+manual cluster test never saw it. Neither did the unit tests. The simulator hit
 it at seed 2, reproducibly, in 20 milliseconds.
 
 ```go
