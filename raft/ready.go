@@ -26,6 +26,11 @@ type Ready struct {
 	// Messages to send to peers, after the above is durable.
 	Messages []Message
 
+	// ReadStates are read requests whose leadership has now been confirmed by
+	// a quorum. The driver may serve each once the state machine has applied
+	// through ReadState.Index.
+	ReadStates []ReadState
+
 	// SoftState is observational only: never persisted, safe to ignore.
 	// Drivers use it to notice leadership changes.
 	Lead NodeID
@@ -38,5 +43,17 @@ func (r Ready) IsEmpty() bool {
 		r.Snapshot.IsEmpty() &&
 		len(r.Entries) == 0 &&
 		len(r.CommittedEntries) == 0 &&
+		len(r.ReadStates) == 0 &&
 		len(r.Messages) == 0
+}
+
+// ReadState is a confirmed linearizable read.
+//
+// Index is the commit index at the moment the read was registered. Serving the
+// read once the state machine has applied through Index yields a value at
+// least as fresh as any write that completed before the read began, which is
+// what linearizability requires.
+type ReadState struct {
+	Index Index
+	Ctx   []byte
 }

@@ -22,7 +22,19 @@ var (
 
 	// ErrNotLeader is returned by Propose on a node that is not the leader.
 	ErrNotLeader = errors.New("raft: not the leader")
+
+	// ErrReadIndexUnavailable means the leader has not yet committed an entry
+	// in its own term, so it cannot trust its commit index. Transient: the
+	// no-op appended on election resolves it within a round trip.
+	ErrReadIndexUnavailable = errors.New("raft: read index not yet available")
 )
+
+// pendingRead is a read waiting for a quorum to confirm our leadership.
+type pendingRead struct {
+	index Index
+	ctx   []byte
+	seq   uint64
+}
 
 // Node is one Raft replica: a pure state machine.
 //
@@ -65,6 +77,13 @@ type Node struct {
 	nextIndex  map[NodeID]Index
 	matchIndex map[NodeID]Index
 
+	// Linearizable reads (ReadIndex). readSeq increments per read request;
+	// ackedReadSeq is the highest sequence each peer has echoed back.
+	readSeq      uint64
+	ackedReadSeq map[NodeID]uint64
+	pendingReads []pendingRead
+	readStates   []ReadState
+
 	msgs          []Message
 	prevHardState HardState
 }
@@ -98,6 +117,37 @@ func NewNode(id NodeID, peers []NodeID, randIntn func(n int) int) *Node {
 	// identical state from one code path.
 	n.becomeFollower(0, None)
 	return n
+}
+
+// Restore reinstates persisted state after a crash, before the node runs.
+//
+// Order matters: the snapshot establishes the log's base, entries extend it,
+// and only then does the hard state set the term, vote, and commit index —
+// commitTo clamps to lastIndex, so applying it before the entries exist would
+// silently lose the commit index.
+//
+// prevHardState is set to what was loaded, so the first Ready does not ask the
+// driver to re-persist state it just read off disk.
+func (n *Node) Restore(hs HardState, ents []Entry, snap *Snapshot) {
+	if !snap.IsEmpty() {
+		n.log.restore(snap)
+	}
+	if len(ents) > 0 {
+		n.log.appendAt(ents)
+		n.log.stable = n.log.lastIndex()
+	}
+	if !hs.IsEmpty() {
+		n.currentTerm = hs.Term
+		n.votedFor = hs.VotedFor
+		n.log.commitTo(hs.Commit)
+		n.prevHardState = hs
+	}
+	// Always a follower on restart. A node that was leader before the crash
+	// has no idea whether the cluster elected someone else meanwhile, and
+	// resuming leadership on its own authority would be a split brain.
+	n.role = Follower
+	n.lead = None
+	n.resetElectionTimer()
 }
 
 // ID returns this node's identifier.
@@ -207,6 +257,7 @@ func (n *Node) Ready() Ready {
 		Entries:          n.log.unstable(),
 		Messages:         n.msgs,
 		CommittedEntries: n.log.nextApplicable(),
+		ReadStates:       n.readStates,
 		Lead:             n.lead,
 		Role:             n.role,
 	}
@@ -237,6 +288,11 @@ func (n *Node) Advance(r Ready) {
 			n.matchIndex[n.id] = n.log.stable
 			n.maybeCommit()
 		}
+	}
+	if len(r.ReadStates) >= len(n.readStates) {
+		n.readStates = nil
+	} else {
+		n.readStates = n.readStates[len(r.ReadStates):]
 	}
 	if len(r.CommittedEntries) > 0 {
 		last := r.CommittedEntries[len(r.CommittedEntries)-1]
@@ -271,6 +327,12 @@ func (n *Node) becomeFollower(term Term, lead NodeID) {
 	n.role = Follower
 	n.lead = lead
 	n.resetElectionTimer()
+
+	// Reads registered while we were leader can no longer be served: we can no
+	// longer prove our commit index is current. Dropping them makes the driver
+	// time the request out and the client retry against the real leader, which
+	// is correct. Serving them would be a stale read.
+	n.pendingReads = nil
 }
 
 // becomeCandidate starts a new election.
@@ -310,6 +372,9 @@ func (n *Node) becomeLeader() {
 
 	n.nextIndex = make(map[NodeID]Index, len(n.peers))
 	n.matchIndex = make(map[NodeID]Index, len(n.peers))
+	n.ackedReadSeq = make(map[NodeID]uint64, len(n.peers))
+	n.readSeq = 0
+	n.pendingReads = nil
 	for _, p := range n.peers {
 		n.nextIndex[p] = n.log.lastIndex() + 1
 		n.matchIndex[p] = 0
@@ -354,6 +419,69 @@ func (n *Node) campaign() {
 			LastLogTerm:  n.log.lastTerm(),
 		})
 	}
+}
+
+// ReadIndex registers a linearizable read.
+//
+// Two conditions must hold before a leader may serve a read from local state,
+// and neither is about the data itself:
+//
+//  1. The leader must have committed an entry in its OWN term. A freshly
+//     elected leader inherits a commit index it cannot verify; the no-op
+//     appended on election supplies the missing proof within one round trip.
+//
+//  2. The leader must still be the leader NOW. A partitioned leader does not
+//     know it has been deposed and would happily serve data that a new leader
+//     has already overwritten. Confirming with a heartbeat round proves
+//     leadership at the moment of the read.
+//
+// This is ReadIndex rather than a leader lease, following the design doc:
+// a lease is faster but assumes bounded clock drift, and the core has no
+// clock to bound.
+func (n *Node) ReadIndex(ctx []byte) error {
+	if n.role != Leader {
+		return ErrNotLeader
+	}
+	if t, ok := n.log.term(n.log.committed); !ok || t != n.currentTerm {
+		return ErrReadIndexUnavailable
+	}
+
+	n.readSeq++
+	n.pendingReads = append(n.pendingReads, pendingRead{
+		index: n.log.committed,
+		ctx:   ctx,
+		seq:   n.readSeq,
+	})
+
+	// A single-node cluster is its own quorum: leadership is not in question.
+	if n.quorum() == 1 {
+		n.maybeReleaseReads()
+		return nil
+	}
+	n.bcastAppend()
+	return nil
+}
+
+// maybeReleaseReads promotes pending reads whose leadership has been confirmed.
+func (n *Node) maybeReleaseReads() {
+	if len(n.pendingReads) == 0 {
+		return
+	}
+	var kept []pendingRead
+	for _, pr := range n.pendingReads {
+		acks := 1 // ourselves
+		for _, p := range n.peers {
+			if n.ackedReadSeq[p] >= pr.seq {
+				acks++
+			}
+		}
+		if acks >= n.quorum() {
+			n.readStates = append(n.readStates, ReadState{Index: pr.index, Ctx: pr.ctx})
+		} else {
+			kept = append(kept, pr)
+		}
+	}
+	n.pendingReads = kept
 }
 
 // bcastAppend sends each peer whatever it is missing. A caught-up peer gets
@@ -464,12 +592,20 @@ func (n *Node) handleAppendEntries(m Message) {
 		To:         m.From,
 		Success:    true,
 		MatchIndex: last,
+		ReadSeq:    m.ReadSeq, // echoed untouched; the leader counts these
 	})
 }
 
 func (n *Node) handleAppendEntriesResp(m Message) {
 	if n.role != Leader {
 		return
+	}
+
+	// Echoed read sequence: proof this peer still considered us leader after
+	// the read was registered.
+	if m.ReadSeq > n.ackedReadSeq[m.From] {
+		n.ackedReadSeq[m.From] = m.ReadSeq
+		n.maybeReleaseReads()
 	}
 
 	if m.Success {
@@ -590,5 +726,8 @@ func (n *Node) hardState() HardState {
 func (n *Node) send(m Message) {
 	m.From = n.id
 	m.Term = n.currentTerm
+	if m.Type == MsgAppendEntries {
+		m.ReadSeq = n.readSeq
+	}
 	n.msgs = append(n.msgs, m)
 }

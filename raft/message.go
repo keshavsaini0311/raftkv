@@ -84,6 +84,13 @@ type Message struct {
 	// leader advance matchIndex without inferring it from what it sent.
 	MatchIndex Index
 
+	// ReadSeq supports linearizable reads. The leader stamps every
+	// AppendEntries with its current read sequence; a follower echoes it back
+	// untouched. A read registered at sequence R is safe to serve once a
+	// quorum has acknowledged a message stamped R or higher, which proves the
+	// leader was still the leader after the read was registered.
+	ReadSeq uint64
+
 	// MsgInstallSnapshot (milestone 5).
 	Snapshot *Snapshot
 }
