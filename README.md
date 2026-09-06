@@ -196,11 +196,34 @@ if you are building something similar.
 | 2 | Log replication — consistency check, Figure 8 commit rule | ✅ |
 | 3 | KV state machine, client sessions, ReadIndex linearizable reads | ✅ |
 | 4 | Deterministic simulator + Porcupine linearizability | ✅ |
-| 5 | Snapshots and log compaction | ✅ |
-| 5b | Membership changes | in progress |
-| 6 | Live visualizer, benchmarks | not started |
+| 5 | Snapshots, log compaction, joint-consensus membership changes | ✅ |
+| 6 | Benchmarks ✅ · live visualizer ❌ | partial |
 
 ---
+
+## Performance
+
+The core does no I/O, so these measure the algorithm itself. Apple M1 Pro:
+
+```
+BenchmarkTick                  52 ns/op       0 allocs/op
+BenchmarkStepAppendEntries     39 ns/op       0 allocs/op
+BenchmarkReadyIdle             29 ns/op       1 alloc/op
+BenchmarkLogTruncate        4,311 ns/op       1 alloc/op   (1,000-entry log)
+```
+
+`Ready` is called on every driver loop iteration, including the overwhelming
+majority where nothing happened — so its idle cost is paid constantly and is
+worth knowing.
+
+Two problems the benchmarks caught, both invisible to the tests:
+
+- **`StepAppendEntries` was 150,781 ns.** The membership work had added a
+  backwards log scan on every message: O(log length) per message, O(n²)
+  overall. Now tracked by index — **~3,900× faster.**
+- **`AppendEntries` had no size cap.** A follower 100,000 entries behind was
+  sent all of them in one message. Now bounded at 256 entries; repair takes
+  more round trips and the transport never has to buffer an unbounded message.
 
 ## Prior art
 

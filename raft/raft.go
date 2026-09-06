@@ -10,6 +10,14 @@ const (
 	electionTimeoutMin = 10 // inclusive
 	electionTimeoutMax = 20 // exclusive
 	heartbeatTimeout   = 1
+
+	// maxEntriesPerMsg bounds one AppendEntries.
+	//
+	// Without a cap, a follower that is 100,000 entries behind is sent all of
+	// them in a single message — which the transport must buffer whole, and
+	// which blocks every other peer behind it. Repair still converges at this
+	// size, just over several round trips, which is the correct trade.
+	maxEntriesPerMsg = 256
 )
 
 var (
@@ -65,6 +73,13 @@ type Node struct {
 	// bootstrapCfg is the membership to fall back to when the log contains no
 	// configuration entry, either at startup or after truncation removed one.
 	bootstrapCfg config
+
+	// confIndex is the index of the configuration entry currently applied, or
+	// 0 for bootstrapCfg. Kept so the common path — an AppendEntries carrying
+	// no configuration change — costs nothing. Rescanning the log on every
+	// message would make replication O(log length) per message and O(n^2)
+	// overall, which a benchmark caught before it reached anything real.
+	confIndex Index
 
 	// Persistent state (Figure 2). Must be durable before any RPC reply.
 	currentTerm Term
@@ -647,11 +662,13 @@ func (n *Node) applyConfFromLog() {
 		}
 		sortNodeIDs(n.cfg.voters)
 		sortNodeIDs(n.cfg.outgoing)
+		n.confIndex = i
 		n.ensureProgress()
 		return
 	}
 	// No configuration entry survives in the log.
 	n.cfg = n.bootstrapCfg
+	n.confIndex = 0
 	n.ensureProgress()
 }
 
@@ -695,12 +712,17 @@ func (n *Node) sendAppend(to NodeID) {
 		return
 	}
 
+	ents := n.log.slice(next)
+	if len(ents) > maxEntriesPerMsg {
+		ents = ents[:maxEntriesPerMsg]
+	}
+
 	n.send(Message{
 		Type:         MsgAppendEntries,
 		To:           to,
 		PrevLogIndex: prevIndex,
 		PrevLogTerm:  prevTerm,
-		Entries:      n.log.slice(next),
+		Entries:      ents,
 		LeaderCommit: n.log.committed,
 	})
 }
@@ -762,7 +784,22 @@ func (n *Node) handleAppendEntries(m Message) {
 		return
 	}
 
-	n.applyConfFromLog()
+	// Only rescan when this message could have changed the configuration:
+	// either it carried one, or a truncation removed the one in force.
+	if conflictIndex == 0 {
+		rescan := n.confIndex > 0 && n.confIndex > last
+		if !rescan {
+			for _, e := range m.Entries {
+				if e.Type == EntryConfChange {
+					rescan = true
+					break
+				}
+			}
+		}
+		if rescan {
+			n.applyConfFromLog()
+		}
+	}
 
 	// Rule 5. min(LeaderCommit, last new entry), NOT LeaderCommit alone: the
 	// leader may have committed entries this follower has not received yet,

@@ -375,6 +375,21 @@ force the checker to treat them as overlapping when the simulator actually ran
 them in a definite order. Times now use the history's monotonic **event
 counter**, which is the true order.
 
+### Two problems found by benchmarks, not tests
+
+`StepAppendEntries` measured 150,781 ns/op. Membership support had introduced a
+backwards scan of the log on every `AppendEntries` to find the current
+configuration — O(log length) per message, O(n²) overall. Every test passed;
+none of them measure. Tracking the configuration entry's index instead made the
+common path O(1): **38.98 ns/op, ~3,900× faster.**
+
+`sendAppend` also had no cap on entries per message, so a follower 100,000
+entries behind would be sent all of them at once, which the transport must
+buffer whole while every other peer waits behind it. Now bounded at 256.
+
+Neither is a correctness bug, which is exactly why no test caught them. A test
+suite answers "is it right"; only a benchmark answers "is it viable".
+
 ### Failure 3 — the real one
 
 After the two harness fixes, only `chaos` still failed, and only at seed 2 —
@@ -445,9 +460,13 @@ That command produces the identical run every time, on any machine, forever.
 
 Stated plainly rather than left to be discovered:
 
-- **Membership changes are not implemented.** `EntryConfChange` exists in the
-  type system and snapshots carry `Voters`, but there is no joint-consensus
-  transition. Adding or removing a node requires a restart.
+- **No live visualizer** (milestone 6). Benchmarks exist; the real-time view of
+  election and partition healing does not.
+- **Membership changes are not exercised by the simulator.** They are unit
+  tested (7 tests, including the joint-quorum rule and configuration reversion
+  on truncation), but the nemesis does not add or remove nodes mid-run, so
+  membership under concurrent faults is untested — the exact combination that
+  found the `server/` waiter bug.
 - **`server/` has no unit tests.** It is covered end-to-end by
   `scripts/manual-test.sh` and, structurally, by `sim/` exercising the same
   driver contract — but its HTTP layer specifically is only tested by the
