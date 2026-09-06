@@ -218,9 +218,19 @@ func describeGroups(groups [][]raft.NodeID) string {
 // leaderVoters is the membership as the current leader sees it, so the
 // visualisation can show a node that has been removed from the cluster but is
 // still running.
+//
+// With no leader it falls back to any live node's view rather than to "every
+// node exists". A replica's own configuration is real information even when it
+// is stale; c.ids is a guess, and it silently un-removes a removed node during
+// every election.
 func (c *Cluster) leaderVoters() []raft.NodeID {
 	if l := c.Leader(); l != 0 {
 		return c.nodes[l].node.Voters()
+	}
+	for _, id := range c.ids {
+		if !c.nodes[id].crashed {
+			return c.nodes[id].node.Voters()
+		}
 	}
 	return c.ids
 }

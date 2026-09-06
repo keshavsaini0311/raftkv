@@ -1,0 +1,701 @@
+<style>
+  :root {
+    --ground:#0E1420; --panel:#151D2B; --raised:#1B2536; --sunk:#0B111C;
+    --line:#22304A; --ink:#C9D4E5; --ink-dim:#6F8098; --ink-faint:#465872;
+
+    --follower:#6B8CAE; --candidate:#D9A441; --leader:#3FBFA8;
+    --down:#C05B5B; --snapshot:#8B7BC7;
+
+    /* Terms cycle through these. Adjacent terms must be told apart at a
+       glance, so the palette walks the hue circle rather than a gradient. */
+    --t0:#3FBFA8; --t1:#D9A441; --t2:#8B7BC7; --t3:#6B8CAE;
+    --t4:#C97E5A; --t5:#5FA85F; --t6:#C0699B; --t7:#4FA3C7;
+
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ground:#EDF0F5; --panel:#FFFFFF; --raised:#F4F6FA; --sunk:#E4E9F0;
+      --line:#D2DAE6; --ink:#16202F; --ink-dim:#5C6D85; --ink-faint:#93A2B5;
+      --follower:#3E6392; --candidate:#8F6216; --leader:#14806D;
+      --down:#A63F3E; --snapshot:#6B57AF;
+      --t0:#14806D; --t1:#8F6216; --t2:#6B57AF; --t3:#3E6392;
+      --t4:#A0552E; --t5:#3B7A3B; --t6:#9C3E70; --t7:#26708F;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:#EDF0F5; --panel:#FFFFFF; --raised:#F4F6FA; --sunk:#E4E9F0;
+    --line:#D2DAE6; --ink:#16202F; --ink-dim:#5C6D85; --ink-faint:#93A2B5;
+    --follower:#3E6392; --candidate:#8F6216; --leader:#14806D;
+    --down:#A63F3E; --snapshot:#6B57AF;
+    --t0:#14806D; --t1:#8F6216; --t2:#6B57AF; --t3:#3E6392;
+    --t4:#A0552E; --t5:#3B7A3B; --t6:#9C3E70; --t7:#26708F;
+  }
+  :root[data-theme="dark"] {
+    --ground:#0E1420; --panel:#151D2B; --raised:#1B2536; --sunk:#0B111C;
+    --line:#22304A; --ink:#C9D4E5; --ink-dim:#6F8098; --ink-faint:#465872;
+    --follower:#6B8CAE; --candidate:#D9A441; --leader:#3FBFA8;
+    --down:#C05B5B; --snapshot:#8B7BC7;
+    --t0:#3FBFA8; --t1:#D9A441; --t2:#8B7BC7; --t3:#6B8CAE;
+    --t4:#C97E5A; --t5:#5FA85F; --t6:#C0699B; --t7:#4FA3C7;
+  }
+
+  body {
+    background: var(--ground); color: var(--ink);
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+    padding: clamp(10px, 2vw, 22px);
+    max-width: 1400px; margin: 0 auto;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+
+  h1 { font-size: 17px; font-weight: 600; margin: 0; }
+  h1 span { color: var(--ink-dim); font-weight: 400; }
+
+  .masthead {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--line);
+  }
+  .masthead p {
+    margin: 0; flex: 1 1 340px; min-width: 0;
+    font-family: var(--sans); font-size: 12.5px; color: var(--ink-dim);
+  }
+
+  button, select, input[type=text] {
+    font-family: var(--mono); font-size: 12px; color: var(--ink);
+    background: var(--raised); border: 1px solid var(--line);
+    border-radius: 2px; padding: 4px 9px; cursor: pointer;
+  }
+  input[type=text] { cursor: text; min-width: 0; }
+  button:hover:not(:disabled), select:hover { border-color: var(--ink-faint); }
+  button:disabled { opacity: .38; cursor: not-allowed; }
+  button:focus-visible, select:focus-visible, input:focus-visible {
+    outline: 2px solid var(--leader); outline-offset: 1px;
+  }
+  button.go { color: var(--leader); border-color: var(--leader); min-width: 70px; }
+  button.danger { color: var(--down); border-color: color-mix(in srgb, var(--down) 55%, transparent); }
+
+  .bar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 3px; padding: 8px 11px;
+  }
+  .bar .sep { width: 1px; height: 20px; background: var(--line); }
+  .bar label { color: var(--ink-dim); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
+  .bar .clock { color: var(--ink-dim); }
+  .bar .clock b { color: var(--ink); font-weight: 500; font-size: 14px; }
+  .grow { flex: 1; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 3px; padding: 11px 13px 13px; min-width: 0;
+  }
+  .card > h2 {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-dim); margin: 0 0 9px;
+    display: flex; justify-content: space-between; gap: 10px;
+  }
+  .card > h2 em { font-style: normal; color: var(--ink-faint); letter-spacing: 0; text-transform: none; }
+
+  .top {
+    display: grid; align-items: start; gap: 12px;
+    grid-template-columns: minmax(0,480px) minmax(0,285px) minmax(0,1fr);
+  }
+  @media (max-width: 1080px) { .top { grid-template-columns: minmax(0,1fr) minmax(0,285px); } }
+  @media (max-width: 760px) { .top { grid-template-columns: minmax(0,1fr); } }
+
+  #ring { display: block; width: 100%; max-width: 460px; height: auto; margin: 0 auto; }
+  #ring .hit { cursor: pointer; }
+
+  /* ---- node inspector ---- */
+
+  .kvgrid { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
+  .kvgrid dt { color: var(--ink-faint); font-size: 11px; }
+  .kvgrid dd { margin: 0; color: var(--accent, var(--ink)); font-size: 12px; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
+  .actions button { flex: 1 1 auto; }
+
+  .state-dump {
+    margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--line);
+    font-size: 11.5px; color: var(--ink-dim);
+    max-height: 120px; overflow-y: auto;
+  }
+  .state-dump b { color: var(--ink); font-weight: 500; }
+
+  /* ---- log matrix ---- */
+
+  .matrix { overflow-x: auto; }
+  .matrix table { border-collapse: separate; border-spacing: 2px; }
+  .matrix th, .matrix td { padding: 0; }
+  .matrix th.idx {
+    font-weight: 400; font-size: 9.5px; color: var(--ink-faint);
+    text-align: center; min-width: 26px; padding-bottom: 2px;
+  }
+  .matrix th.who {
+    text-align: right; padding-right: 8px; font-weight: 500;
+    color: var(--ink-dim); font-size: 11.5px; white-space: nowrap;
+  }
+  .matrix tr.sel th.who { color: var(--ink); }
+  .matrix tr.down th.who { color: var(--down); }
+
+  .cell {
+    width: 26px; height: 24px; border-radius: 2px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9.5px; color: var(--sunk);
+    background: var(--sunk); border: 1px solid transparent;
+  }
+  .cell.has { background: var(--term); color: var(--sunk); font-weight: 600; }
+  /* Uncommitted entries are outlined, not filled. An entry a leader has
+     appended but not yet committed can still be thrown away — showing it as
+     solid would claim a durability it does not have. */
+  .cell.uncommitted {
+    background: transparent; border-color: var(--term); color: var(--term);
+  }
+  .cell.gap { background: transparent; border: 1px dashed var(--line); }
+  .cell.compacted {
+    background: repeating-linear-gradient(45deg,
+      transparent, transparent 3px, var(--line) 3px, var(--line) 4px);
+  }
+  .cell.applied-edge { box-shadow: inset 0 -2px 0 var(--ink); }
+
+  .matrix td.tail { padding-left: 8px; white-space: nowrap; color: var(--ink-faint); font-size: 11px; }
+  .matrix td.tail b { color: var(--ink-dim); font-weight: 500; }
+
+  .matrix-legend {
+    display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 11px;
+    padding-top: 9px; border-top: 1px solid var(--line);
+    color: var(--ink-dim); font-size: 11px;
+  }
+  .matrix-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .matrix-legend i { width: 13px; height: 13px; border-radius: 2px; display: inline-block; }
+
+  /* ---- bottom row ---- */
+
+  .wirelist { columns: 2; column-gap: 22px; }
+  @media (max-width: 760px) { .wirelist { columns: 1; } }
+
+  .scroller { max-height: 340px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+  .scroller li { padding: 2px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent); }
+  .scroller li:last-child { border-bottom: 0; }
+
+  .wire-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 8px; align-items: baseline; }
+  .wire-row .hop { color: var(--ink-dim); }
+  .wire-row .kind { color: var(--wire); }
+  .wire-row .eta { color: var(--ink-faint); font-size: 11px; }
+  .wire-row.cut { opacity: .45; }
+  .wire-row.cut .kind { text-decoration: line-through; text-decoration-color: var(--down); }
+
+  .events li { color: var(--ink-dim); font-size: 11.5px; }
+  .events li:last-child { color: var(--ink); }
+  .empty { color: var(--ink-faint); font-size: 11.5px; padding: 6px 0; }
+
+  #boot[hidden] { display: none; }
+  #boot {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 300px; color: var(--ink-dim); gap: 10px;
+  }
+  #boot.failed { color: var(--down); }
+
+  footer {
+    color: var(--ink-faint); font-size: 11px; font-family: var(--sans);
+    border-top: 1px solid var(--line); padding-top: 9px;
+  }
+  footer code { font-family: var(--mono); color: var(--ink-dim); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="masthead">
+  <h1>raftkv <span>· consensus lab</span></h1>
+  <p>The actual Go implementation, compiled to WebAssembly and running in this tab.
+     Crash nodes, cut the network, propose writes — and watch what the algorithm does about it.</p>
+  <button id="theme" title="Toggle light / dark">◐</button>
+</header>
+
+<div id="boot">compiling cluster…</div>
+
+<div id="app" hidden>
+  <div class="bar">
+    <button class="go" id="run">run</button>
+    <button id="step1">step</button>
+    <button id="step10">+10</button>
+    <label>speed
+      <select id="speed">
+        <option value="3">slow</option>
+        <option value="10" selected>normal</option>
+        <option value="30">fast</option>
+      </select>
+    </label>
+    <span class="sep"></span>
+    <span class="clock">tick <b id="clock">0</b></span>
+    <span class="clock">leader <b id="leader">—</b></span>
+    <span class="grow"></span>
+    <label>loss
+      <select id="loss">
+        <option value="0" selected>0%</option>
+        <option value="0.1">10%</option>
+        <option value="0.3">30%</option>
+        <option value="0.6">60%</option>
+      </select>
+    </label>
+    <label>nodes
+      <select id="size">
+        <option value="3">3</option>
+        <option value="5" selected>5</option>
+        <option value="7">7</option>
+      </select>
+    </label>
+    <button id="reset">reset</button>
+  </div>
+
+  <div class="bar" style="margin-top:12px">
+    <label>key <input type="text" id="key" value="a" size="6" spellcheck="false"></label>
+    <label>value <input type="text" id="val" value="1" size="8" spellcheck="false"></label>
+    <button id="put">put</button>
+    <button id="get">get</button>
+    <button id="del">del</button>
+    <span class="sep"></span>
+    <span class="clock" style="font-size:11px">partition</span>
+    <span id="sides"></span>
+    <button id="split">split</button>
+    <button id="heal">heal</button>
+  </div>
+
+  <div class="top" style="margin-top:12px">
+    <section class="card">
+      <h2>Cluster <em>click a node to select it</em></h2>
+      <svg id="ring" viewBox="0 0 440 296" role="img" aria-label="Cluster"></svg>
+    </section>
+
+    <section class="card" id="inspector">
+      <h2>Node <em id="insp-name">—</em></h2>
+      <dl class="kvgrid" id="insp-grid"></dl>
+      <div class="actions" id="insp-actions"></div>
+      <div class="state-dump" id="insp-kv"></div>
+    </section>
+
+    <section class="card">
+      <h2>What happened</h2>
+      <ul class="scroller events" id="events"></ul>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:12px">
+    <h2>Replicated log <em>columns are indices · colour is the term that created the entry</em></h2>
+    <div class="matrix" id="matrix"></div>
+    <div class="matrix-legend">
+      <span><i style="background:var(--t0)"></i>committed — agreed by a majority, safe forever</span>
+      <span><i style="border:1px solid var(--t0)"></i>appended, not yet committed — can still be thrown away</span>
+      <span><i class="cell compacted" style="width:13px;height:13px"></i>compacted into a snapshot</span>
+      <span><i style="box-shadow:inset 0 -2px 0 var(--ink);background:var(--sunk)"></i>applied to the state machine</span>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:12px">
+    <h2>On the wire <em id="wire-count"></em></h2>
+    <ul class="scroller wirelist" id="wire"></ul>
+  </section>
+</div>
+
+<footer>
+  Built with <code>./scripts/build-lab.sh</code>. The raft core has no clock, no goroutines and no I/O —
+  which is exactly why it runs unmodified in a browser.
+</footer>
+
+<script>__WASM_EXEC__</script>
+<script>
+const WASM_B64 = "__WASM_B64__";
+
+/* ---- boot ------------------------------------------------------------ */
+
+const boot = document.getElementById("boot");
+const app = document.getElementById("app");
+
+// The module ships gzipped and base64'd. Raw base64 of a 3.4 MB binary is
+// ~4.6 MB of page; compressed it is ~1.3 MB, and DecompressionStream is in
+// every browser that can run Go's wasm anyway.
+async function inflate(b64) {
+  const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Response(stream).arrayBuffer();
+}
+
+async function start() {
+  try {
+    const go = new Go();
+    const bytes = await inflate(WASM_B64);
+    const { instance } = await WebAssembly.instantiate(bytes, go.importObject);
+    go.run(instance); // never resolves: main() blocks on select{}
+    if (typeof raftAct !== "function") throw new Error("module did not export raftAct");
+  } catch (err) {
+    boot.className = "failed";
+    boot.textContent = "could not start the cluster: " + err.message;
+    return;
+  }
+  boot.hidden = true;
+  app.hidden = false;
+  wire();
+  act({ do: "reset", seed: 1, nodes: 5, every: 0 });
+}
+
+/* ---- driving the core ------------------------------------------------ */
+
+let S = null;      // latest View from Go
+let selected = 1;  // selected node id
+let sideA = new Set();
+
+// Every call returns the WHOLE view. Partial updates would mean keeping a
+// second copy of the cluster's state in JavaScript, and the two would disagree
+// the first time an action had a consequence nobody predicted.
+function act(cmd) {
+  S = JSON.parse(raftAct(JSON.stringify(cmd || {})));
+  render();
+}
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const termVar = t => `var(--t${t % 8})`;
+const roleVar = r => r === "Leader" ? "--leader" : r === "Candidate" ? "--candidate" : "--follower";
+const nodeById = id => S.nodes.find(n => n.id === id);
+
+function wireVar(t) {
+  if (t.startsWith("RequestVote")) return "--candidate";
+  if (t.startsWith("InstallSnapshot")) return "--snapshot";
+  return "--leader";
+}
+
+/* ---- ring ------------------------------------------------------------ */
+
+const SVGNS = "http://www.w3.org/2000/svg";
+const mk = (tag, attrs, text) => {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
+const ring = $("ring");
+const CX = 220, CY = 146, RR = 104, NR = 26;
+
+function ringPos(i, n) {
+  const a = -Math.PI / 2 + (2 * Math.PI * i) / n;
+  return { x: CX + RR * Math.cos(a), y: CY + RR * Math.sin(a) };
+}
+
+function drawRing() {
+  ring.replaceChildren();
+  const n = S.nodes.length;
+  const pos = S.nodes.map((_, i) => ringPos(i, n));
+  const groupOf = new Map();
+  if (S.groups) S.groups.forEach((g, gi) => g.forEach(id => groupOf.set(id, gi)));
+
+  const defs = mk("defs", {});
+  for (const v of ["--candidate", "--leader", "--snapshot"]) {
+    const m = mk("marker", {
+      id: "m" + v, viewBox: "0 0 8 8", refX: "7", refY: "4",
+      markerWidth: "5", markerHeight: "5", orient: "auto-start-reverse",
+    });
+    m.append(mk("path", { d: "M0,0 L8,4 L0,8 z", fill: `var(${v})` }));
+    defs.append(m);
+  }
+  ring.append(defs);
+
+  // Peer links, dashed and red where the partition has cut them.
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b < n; b++) {
+      const cut = S.groups && groupOf.get(S.nodes[a].id) !== groupOf.get(S.nodes[b].id);
+      ring.append(mk("line", {
+        x1: pos[a].x, y1: pos[a].y, x2: pos[b].x, y2: pos[b].y,
+        stroke: cut ? "var(--down)" : "var(--ink-faint)",
+        "stroke-opacity": cut ? .3 : .3,
+        "stroke-dasharray": cut ? "3 5" : "",
+        "stroke-width": 1,
+      }));
+    }
+  }
+
+  // Messages currently in flight. Several can share a pair, so each is nudged
+  // sideways by its rank — otherwise they stack into one line and a burst of
+  // five looks exactly like a burst of one.
+  const seenPair = new Map();
+  for (const w of S.wire) {
+    const ai = S.nodes.findIndex(x => x.id === w.f), bi = S.nodes.findIndex(x => x.id === w.o);
+    if (ai < 0 || bi < 0) continue;
+    const key = ai + ":" + bi;
+    const rank = seenPair.get(key) || 0;
+    seenPair.set(key, rank + 1);
+
+    const from = pos[ai], to = pos[bi];
+    const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len, pad = NR + 5;
+    const off = rank * 5;
+    const px = -uy * off, py = ux * off;
+    ring.append(mk("line", {
+      x1: from.x + ux * pad + px, y1: from.y + uy * pad + py,
+      x2: to.x - ux * pad + px, y2: to.y - uy * pad + py,
+      stroke: `var(${wireVar(w.t)})`, "stroke-width": 1.6,
+      "stroke-opacity": w.cut ? .2 : .85,
+      "stroke-dasharray": w.cut ? "2 3" : "",
+      "marker-end": `url(#m${wireVar(w.t)})`,
+    }));
+  }
+
+  S.nodes.forEach((nd, i) => {
+    const p = pos[i];
+    const g = mk("g", { class: "hit" });
+    const colour = nd.crashed ? "var(--down)" : `var(${roleVar(nd.role)})`;
+
+    if (nd.id === selected) {
+      g.append(mk("circle", {
+        cx: p.x, cy: p.y, r: NR + 7, fill: "none",
+        stroke: "var(--ink)", "stroke-opacity": .5, "stroke-width": 1,
+      }));
+    }
+    // A node that is running but no longer a voter gets a dotted halo: present,
+    // not counted. That state is the whole confusion of membership changes.
+    if (!nd.voter) {
+      g.append(mk("circle", {
+        cx: p.x, cy: p.y, r: NR + 3, fill: "none", stroke: "var(--ink-faint)",
+        "stroke-dasharray": "2 4", "stroke-width": 1,
+      }));
+    }
+    g.append(mk("circle", {
+      cx: p.x, cy: p.y, r: NR, fill: colour, "fill-opacity": nd.crashed ? .06 : .14,
+      stroke: colour, "stroke-width": nd.role === "Leader" && !nd.crashed ? 2.5 : 1.5,
+      "stroke-dasharray": nd.crashed ? "3 3" : "",
+    }));
+    g.append(mk("text", {
+      x: p.x, y: p.y - 2, "text-anchor": "middle", "font-size": 13,
+      "font-family": "var(--mono)", "font-weight": 600,
+      fill: nd.crashed ? "var(--ink-faint)" : "var(--ink)",
+    }, "n" + nd.id));
+    g.append(mk("text", {
+      x: p.x, y: p.y + 11, "text-anchor": "middle", "font-size": 9.5,
+      "font-family": "var(--mono)", fill: "var(--ink-dim)",
+    }, nd.crashed ? "down" : "t" + nd.term));
+
+    g.addEventListener("click", () => { selected = nd.id; render(); });
+    ring.append(g);
+  });
+}
+
+/* ---- inspector ------------------------------------------------------- */
+
+function drawInspector() {
+  const nd = nodeById(selected) || S.nodes[0];
+  selected = nd.id;
+  $("insp-name").textContent = "n" + nd.id;
+
+  const rows = [
+    ["role", nd.crashed ? "crashed" : nd.role.toLowerCase(),
+      nd.crashed ? "var(--down)" : `var(${roleVar(nd.role)})`],
+    ["term", nd.term],
+    ["believes leader is", nd.lead ? "n" + nd.lead : "nobody"],
+    ["log", nd.first > nd.last ? "empty" : `${nd.first}..${nd.last}`],
+    ["committed", nd.commit],
+    ["applied", nd.applied],
+    ["in configuration", nd.voter ? "yes" : "no — removed",
+      nd.voter ? null : "var(--candidate)"],
+  ];
+  if (nd.joint) rows.push(["membership", "JOINT — needs a majority of both", "var(--candidate)"]);
+
+  $("insp-grid").innerHTML = rows.map(([k, v, c]) =>
+    `<dt>${k}</dt><dd${c ? ` style="--accent:${c}"` : ""}>${esc(v)}</dd>`).join("");
+
+  const acts = [];
+  acts.push(nd.crashed
+    ? `<button data-do="restart" data-id="${nd.id}">restart</button>`
+    : `<button class="danger" data-do="crash" data-id="${nd.id}">crash</button>`);
+  acts.push(`<button data-do="isolate" data-id="${nd.id}">isolate</button>`);
+  acts.push(`<button data-do="campaign" data-id="${nd.id}"${nd.crashed || nd.role === "Leader" ? " disabled" : ""}>force election</button>`);
+  acts.push(nd.voter
+    ? `<button data-do="remove" data-id="${nd.id}">remove from config</button>`
+    : `<button data-do="add" data-id="${nd.id}">add to config</button>`);
+  $("insp-actions").innerHTML = acts.join("");
+
+  const keys = Object.keys(nd.keys).sort();
+  $("insp-kv").innerHTML = keys.length
+    ? "state machine — " + keys.map(k => `<b>${esc(k)}</b>=${esc(nd.keys[k])}`).join(", ")
+    : "state machine is empty";
+}
+
+/* ---- log matrix ------------------------------------------------------ */
+
+const COLS = 22;
+
+function drawMatrix() {
+  // maxLast is the real high-water mark; last is only the column range, which
+  // is floored at 1 so an empty cluster still draws a header. Comparing
+  // against the floor instead would report every node as one entry behind
+  // before anything has been written.
+  const maxLast = Math.max(0, ...S.nodes.map(n => n.last));
+  const last = Math.max(1, maxLast);
+  const start = Math.max(1, last - COLS + 1);
+
+  let head = '<tr><th class="who"></th>';
+  for (let i = start; i <= last; i++) head += `<th class="idx">${i}</th>`;
+  head += "<th></th></tr>";
+
+  const body = S.nodes.map(nd => {
+    const byIndex = new Map(nd.entries.map(e => [e.i, e]));
+    let row = `<tr class="${nd.id === selected ? "sel " : ""}${nd.crashed ? "down" : ""}">` +
+      `<th class="who">n${nd.id}</th>`;
+    for (let i = start; i <= last; i++) {
+      if (i < nd.first) { row += `<td><div class="cell compacted" title="index ${i}: compacted into a snapshot"></div></td>`; continue; }
+      if (i > nd.last) { row += `<td><div class="cell gap"></div></td>`; continue; }
+      const e = byIndex.get(i);
+      if (!e) { row += `<td><div class="cell has" style="--term:var(--ink-faint)" title="index ${i}"></div></td>`; continue; }
+      const cls = ["cell", i <= nd.commit ? "has" : "has uncommitted"];
+      if (i === nd.applied) cls.push("applied-edge");
+      const glyph = e.k === "conf" ? "±" : e.k === "noop" ? "·" : "";
+      row += `<td><div class="${cls.join(" ")}" style="--term:${termVar(e.t)}"` +
+        ` title="index ${e.i} · term ${e.t} · ${esc(e.d)}">${glyph}</div></td>`;
+    }
+    const behind = maxLast - nd.last;
+    row += `<td class="tail">commit <b>${nd.commit}</b>` +
+      (behind > 0 && !nd.crashed ? ` · <b>${behind}</b> behind` : "") + "</td></tr>";
+    return row;
+  }).join("");
+
+  $("matrix").innerHTML = `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+/* ---- wire and events ------------------------------------------------- */
+
+function drawWire() {
+  $("wire-count").textContent = S.wire.length ? S.wire.length + " in flight" : "";
+  if (!S.wire.length) {
+    $("wire").innerHTML = `<li class="empty">nothing in flight — the cluster is quiet</li>`;
+    return;
+  }
+  $("wire").innerHTML = S.wire.slice(0, 40).map(w => {
+    let detail = `term ${w.tm}`;
+    if (w.t === "AppendEntries") detail += w.n ? ` · ${w.n} ${w.n === 1 ? "entry" : "entries"} after ${w.ix}` : ` · heartbeat after ${w.ix}`;
+    else if (w.t === "AppendEntriesResp") detail += w.ok ? ` · ok, matched ${w.ix}` : " · REJECTED, logs differ";
+    else if (w.t === "RequestVote") detail += ` · my log ends at ${w.ix}`;
+    else if (w.t === "RequestVoteResp") detail += w.g ? " · vote GRANTED" : " · vote denied";
+    return `<li><div class="wire-row${w.cut ? " cut" : ""}" style="--wire:var(${wireVar(w.t)})">` +
+      `<span class="hop">n${w.f} → n${w.o}</span>` +
+      `<span><span class="kind">${w.t}</span> <span class="eta">${esc(detail)}</span></span>` +
+      `<span class="eta">${w.cut ? "cut" : "t" + w.at}</span></div></li>`;
+  }).join("");
+}
+
+function drawEvents() {
+  const el = $("events");
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  el.innerHTML = S.log.length
+    ? S.log.slice(-80).map(line => `<li>${esc(line)}</li>`).join("")
+    : `<li class="empty">nothing yet</li>`;
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function drawSides() {
+  $("sides").innerHTML = S.nodes.map(nd =>
+    `<button data-side="${nd.id}" style="${sideA.has(nd.id)
+      ? "color:var(--candidate);border-color:var(--candidate)" : ""}">n${nd.id}</button>`).join(" ");
+}
+
+// quorumNote explains a leader that cannot make progress.
+//
+// "leader n1" alone is technically true and practically misleading: a leader
+// stranded on the minority side of a partition still believes it leads, and
+// the only visible symptom is that writes never commit. Saying so answers the
+// question someone is actually asking.
+function quorumNote() {
+  if (!S.leader) return "";
+  const voters = S.nodes.filter(n => n.voter).length;
+  const group = S.groups ? (S.groups.find(g => g.includes(S.leader)) || [S.leader]) : S.nodes.map(n => n.id);
+  const reachable = group.filter(id => {
+    const n = nodeById(id);
+    return n && n.voter && !n.crashed;
+  }).length;
+  return reachable * 2 > voters ? "" : " · no quorum";
+}
+
+function render() {
+  $("clock").textContent = S.t;
+  const note = quorumNote();
+  $("leader").innerHTML = (S.leader ? "n" + S.leader : "none") +
+    (note ? `<span style="color:var(--candidate);font-weight:400;font-size:11px">${note}</span>` : "");
+  drawRing();
+  drawInspector();
+  drawMatrix();
+  drawWire();
+  drawEvents();
+  drawSides();
+}
+
+/* ---- controls -------------------------------------------------------- */
+
+let running = false, acc = 0, prevT = 0;
+
+function setRunning(on) {
+  running = on;
+  $("run").textContent = on ? "pause" : "run";
+  if (on) { prevT = performance.now(); acc = 0; requestAnimationFrame(loop); }
+}
+
+function loop(now) {
+  if (!running) return;
+  acc += (now - prevT) / 1000;
+  prevT = now;
+  const dt = 1 / parseFloat($("speed").value);
+  let steps = 0;
+  while (acc >= dt && steps < 20) { acc -= dt; steps++; }
+  if (steps) act({ do: "tick", n: steps });
+  requestAnimationFrame(loop);
+}
+
+function wire() {
+  $("run").addEventListener("click", () => setRunning(!running));
+  $("step1").addEventListener("click", () => { setRunning(false); act({ do: "tick", n: 1 }); });
+  $("step10").addEventListener("click", () => { setRunning(false); act({ do: "tick", n: 10 }); });
+
+  $("put").addEventListener("click", () => act({ do: "put", key: $("key").value, value: $("val").value }));
+  $("get").addEventListener("click", () => act({ do: "read", key: $("key").value }));
+  $("del").addEventListener("click", () => act({ do: "del", key: $("key").value }));
+
+  $("split").addEventListener("click", () => act({ do: "split", ids: [...sideA] }));
+  $("heal").addEventListener("click", () => { sideA.clear(); act({ do: "heal" }); });
+  $("loss").addEventListener("change", e => act({ do: "net", drop: parseFloat(e.target.value), dup: 0 }));
+
+  $("reset").addEventListener("click", () => {
+    setRunning(false);
+    sideA.clear();
+    selected = 1;
+    // A fresh seed each reset, so "try again" is a genuinely different run
+    // rather than the same election replayed. Determinism is the recorded
+    // replay's job; exploration is this page's.
+    act({ do: "reset", seed: Math.floor(Math.random() * 1e6) + 1, nodes: +$("size").value, every: 0 });
+  });
+
+  // Delegated: the inspector and partition chips are rebuilt on every render,
+  // so per-button listeners would leak one set per frame.
+  document.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.do) act({ do: b.dataset.do, id: +b.dataset.id });
+    else if (b.dataset.side) {
+      const id = +b.dataset.side;
+      sideA.has(id) ? sideA.delete(id) : sideA.add(id);
+      drawSides();
+    }
+  });
+
+  document.addEventListener("keydown", e => {
+    if (/^(INPUT|SELECT)$/.test(e.target.tagName)) return;
+    if (e.key === " ") { e.preventDefault(); setRunning(!running); }
+    else if (e.key === "ArrowRight") { setRunning(false); act({ do: "tick", n: e.shiftKey ? 10 : 1 }); }
+  });
+
+  $("theme").addEventListener("click", () => {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const now = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+    document.documentElement.dataset.theme = now === "dark" ? "light" : "dark";
+  });
+}
+
+start();
+</script>

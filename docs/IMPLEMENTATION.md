@@ -477,12 +477,12 @@ That command produces the identical run every time, on any machine, forever.
 
 Stated plainly rather than left to be discovered:
 
-- **The visualizer shows one recorded run, not a live cluster.** `cmd/raftviz`
-  runs a seeded simulation and writes a self-contained HTML replay; it cannot
-  attach to a running `raftkv` process. Nothing prevents it — `server/` would
-  need to expose the same observable fields the trace records — but a live view
-  loses the property the replay is built on, which is that the same seed
-  produces the same picture every time.
+- **Neither visualizer attaches to a running cluster.** `cmd/raftviz` replays a
+  recorded simulation; `cmd/raftwasm` runs a fresh simulated cluster inside the
+  browser. Neither can point at a live `raftkv` process. `server/` would need to
+  expose the same observable fields `sim.View` assembles — not hard, but a live
+  view gives up the property both of these are built on, which is that what you
+  see is reproducible.
 - **Leadership transfer is not implemented.** A leader cannot remove itself, so
   the nemesis never proposes that change. Removing the current leader requires
   waiting for it to step down naturally.

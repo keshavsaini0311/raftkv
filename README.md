@@ -152,14 +152,41 @@ Current numbers:
 | `sim/` | 1,120 | 572 | 93.8% |
 | `server/` | 920 | 380 | 68.4% |
 
-**72 tests.** Several exist only because *mutation testing* showed the suite
+**77 tests.** Several exist only because *mutation testing* showed the suite
 missed them — deleting the votes-map reset, clearing `votedFor` on every
 stepdown, or dropping the post-election heartbeat each broke **no test at all**,
 despite each being a documented path to two leaders in one term.
 
 ---
 
-## Watching it run
+## Driving it yourself
+
+```sh
+./scripts/build-lab.sh          # writes raftlab.html
+open raftlab.html
+```
+
+One file, ~1.3 MB, no server. It contains the **actual raft core compiled to
+WebAssembly** — not a JavaScript retelling of the algorithm, which would drift
+from this implementation and quietly teach you something untrue.
+
+Crash a node. Isolate the leader. Force an election. Propose a write and watch
+it sit uncommitted until a majority acknowledges it. Remove a node from the
+configuration and watch the cluster pass through joint consensus.
+
+The centre of the page is the **replicated log**: every node's log, aligned by
+index, coloured by the term that created each entry. Committed entries are
+filled; appended-but-uncommitted ones are outlined, because an entry a leader
+has written down can still be thrown away. Isolate a leader and its row simply
+stops while the others advance — the whole of Raft's safety argument, visible.
+
+That this is possible at all is the payoff for `raft/` having no clock, no
+goroutines and no I/O. `TestRaftCoreStaysPure` enforces that; portability is
+what it buys.
+
+---
+
+## Watching a recorded run
 
 ```sh
 go run ./cmd/raftviz -seed 42891 -nodes 5 -ticks 700 -out replay.html
@@ -232,7 +259,7 @@ if you are building something similar.
 | 3 | KV state machine, client sessions, ReadIndex linearizable reads | ✅ |
 | 4 | Deterministic simulator + Porcupine linearizability | ✅ |
 | 5 | Snapshots, log compaction, joint-consensus membership changes | ✅ |
-| 6 | Benchmarks, replay trace, and a self-contained visualizer | ✅ |
+| 6 | Benchmarks, a deterministic replay, and an interactive WASM lab | ✅ |
 
 ---
 

@@ -5,3 +5,8 @@ raftkv
 coverage.*
 .DS_Store
 .env*
+
+# Generated visualizers
+raftlab.html
+replay.html
+*.wasm
