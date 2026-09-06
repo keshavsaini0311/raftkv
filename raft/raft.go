@@ -1,6 +1,9 @@
 package raft
 
-import "errors"
+import (
+	"errors"
+	"sort"
+)
 
 // Timing is counted in TICKS, never durations. One Tick() is one unit of
 // logical time; what that means in wall time is the driver's business.
@@ -52,6 +55,15 @@ type Node struct {
 	// bans. Determinism is therefore the caller's guarantee, seeded and
 	// replayable.
 	randIntn func(n int) int
+
+	// Leader only, reinitialised on every election. nextIndex is optimistic
+	// (assume the follower matches us) and walks back on rejection;
+	// matchIndex is pessimistic (assume nothing) and only ever moves forward
+	// on a confirmed success. The asymmetry is deliberate: guessing high
+	// costs a round trip, guessing high on matchIndex would commit an entry
+	// a follower never received.
+	nextIndex  map[NodeID]Index
+	matchIndex map[NodeID]Index
 
 	msgs          []Message
 	prevHardState HardState
@@ -123,7 +135,7 @@ func (n *Node) Tick() {
 		n.heartbeatElapsed++
 		if n.heartbeatElapsed >= heartbeatTimeout {
 			n.heartbeatElapsed = 0
-			n.bcastHeartbeat()
+			n.bcastAppend()
 		}
 	}
 }
@@ -192,6 +204,7 @@ func respTypeFor(t MessageType) MessageType {
 // messages that were never sent.
 func (n *Node) Ready() Ready {
 	rd := Ready{
+		Entries:          n.log.unstable(),
 		Messages:         n.msgs,
 		CommittedEntries: n.log.nextApplicable(),
 		Lead:             n.lead,
@@ -213,6 +226,17 @@ func (n *Node) Ready() Ready {
 func (n *Node) Advance(r Ready) {
 	if r.HardState != nil {
 		n.prevHardState = *r.HardState
+	}
+	if len(r.Entries) > 0 {
+		// The driver has fsynced these. Only now may the leader count them
+		// toward a quorum: an entry acknowledged before it is durable can
+		// vanish in a crash while the leader believes it committed.
+		last := r.Entries[len(r.Entries)-1]
+		n.log.stableTo(last.Index)
+		if n.role == Leader {
+			n.matchIndex[n.id] = n.log.stable
+			n.maybeCommit()
+		}
 	}
 	if len(r.CommittedEntries) > 0 {
 		last := r.CommittedEntries[len(r.CommittedEntries)-1]
@@ -284,9 +308,41 @@ func (n *Node) becomeLeader() {
 	n.lead = n.id
 	n.heartbeatElapsed = 0
 
+	n.nextIndex = make(map[NodeID]Index, len(n.peers))
+	n.matchIndex = make(map[NodeID]Index, len(n.peers))
+	for _, p := range n.peers {
+		n.nextIndex[p] = n.log.lastIndex() + 1
+		n.matchIndex[p] = 0
+	}
+
+	// Append an empty entry for the new term.
+	//
+	// Figure 8 forbids committing a previous-term entry by replica count
+	// alone, so entries inherited from a deposed leader can only commit
+	// indirectly — carried along once a CURRENT-term entry commits. Without
+	// this no-op, that cannot happen until a client happens to write, and a
+	// quiet cluster can hold entries that are replicated everywhere and
+	// committed nowhere. Three lines to close a liveness gap.
+	n.log.append(n.currentTerm, Entry{Type: EntryNormal})
+	n.matchIndex[n.id] = n.log.lastIndex()
+
 	// Immediately, not on the next heartbeat tick. Every peer's election clock
 	// is already running, and the first to time out deposes us for no reason.
-	n.bcastHeartbeat()
+	n.bcastAppend()
+}
+
+// Propose appends a command to the log and starts replicating it. Only the
+// leader may propose; everyone else redirects the client to n.lead.
+//
+// Returning the index lets a driver wait for exactly this entry to commit.
+func (n *Node) Propose(data []byte) (Index, error) {
+	if n.role != Leader {
+		return 0, ErrNotLeader
+	}
+	added := n.log.append(n.currentTerm, Entry{Type: EntryNormal, Data: data})
+	n.matchIndex[n.id] = n.log.lastIndex()
+	n.bcastAppend()
+	return added[0].Index, nil
 }
 
 func (n *Node) campaign() {
@@ -300,18 +356,42 @@ func (n *Node) campaign() {
 	}
 }
 
-// bcastHeartbeat sends an empty AppendEntries to every peer. Two callers: the
-// heartbeat timer and becomeLeader. One function cannot drift from itself.
-func (n *Node) bcastHeartbeat() {
+// bcastAppend sends each peer whatever it is missing. A caught-up peer gets
+// zero entries, which is exactly a heartbeat — so replication and heartbeating
+// are one code path rather than two that can disagree.
+func (n *Node) bcastAppend() {
 	for _, peer := range n.peers {
-		n.send(Message{
-			Type:         MsgAppendEntries,
-			To:           peer,
-			PrevLogIndex: n.log.lastIndex(),
-			PrevLogTerm:  n.log.lastTerm(),
-			LeaderCommit: n.log.committed,
-		})
+		n.sendAppend(peer)
 	}
+}
+
+// sendAppend sends one peer the entries after its nextIndex, plus the
+// consistency check for the entry immediately before them.
+func (n *Node) sendAppend(to NodeID) {
+	next := n.nextIndex[to]
+	if next < 1 {
+		next = 1
+	}
+
+	prevIndex := next - 1
+	prevTerm, ok := n.log.term(prevIndex)
+	if !ok {
+		// The entries this follower needs have been compacted into a
+		// snapshot. Milestone 5 sends InstallSnapshot here; until then, fall
+		// back to the start of what we still hold.
+		next = n.log.firstIndex()
+		prevIndex = next - 1
+		prevTerm, _ = n.log.term(prevIndex)
+	}
+
+	n.send(Message{
+		Type:         MsgAppendEntries,
+		To:           to,
+		PrevLogIndex: prevIndex,
+		PrevLogTerm:  prevTerm,
+		Entries:      n.log.slice(next),
+		LeaderCommit: n.log.committed,
+	})
 }
 
 // =============================================================================
@@ -357,19 +437,107 @@ func (n *Node) handleAppendEntries(m Message) {
 	// the only thing keeping followers quiet.
 	n.becomeFollower(m.Term, m.From)
 
-	// Milestone 1 keeps no log, so the consistency check trivially succeeds;
-	// milestone 2 replaces this with maybeAppend.
+	last, conflictIndex, conflictTerm, ok := n.log.maybeAppend(m.PrevLogIndex, m.PrevLogTerm, m.Entries)
+	if !ok {
+		// Reject with a hint, so the leader can skip a whole conflicting term
+		// per round trip instead of one entry at a time.
+		n.send(Message{
+			Type:          MsgAppendEntriesResp,
+			To:            m.From,
+			Success:       false,
+			ConflictIndex: conflictIndex,
+			ConflictTerm:  conflictTerm,
+		})
+		return
+	}
+
+	// Rule 5. min(LeaderCommit, last new entry), NOT LeaderCommit alone: the
+	// leader may have committed entries this follower has not received yet,
+	// and committing past our own log would mean applying entries we do not
+	// have.
+	if m.LeaderCommit > n.log.committed {
+		n.log.commitTo(min(m.LeaderCommit, last))
+	}
+
 	n.send(Message{
 		Type:       MsgAppendEntriesResp,
 		To:         m.From,
 		Success:    true,
-		MatchIndex: n.log.lastIndex(),
+		MatchIndex: last,
 	})
 }
 
 func (n *Node) handleAppendEntriesResp(m Message) {
-	// Milestone 2 uses this to advance matchIndex and drive the commit rule.
-	// A heartbeat ack carries no information while there is no log.
+	if n.role != Leader {
+		return
+	}
+
+	if m.Success {
+		// Only ever forward. A delayed response from an earlier, shorter
+		// AppendEntries must not drag matchIndex backwards — that would
+		// un-commit an entry, and commitment is permanent.
+		if m.MatchIndex > n.matchIndex[m.From] {
+			n.matchIndex[m.From] = m.MatchIndex
+			n.nextIndex[m.From] = m.MatchIndex + 1
+		}
+		n.maybeCommit()
+		return
+	}
+
+	// Rejected: back nextIndex up using the follower's conflict hint.
+	next := m.ConflictIndex
+	if m.ConflictTerm != 0 {
+		// If we also hold that term, jump to just past OUR last entry of it:
+		// everything before is already known to agree.
+		if idx, found := n.log.lastIndexOfTerm(m.ConflictTerm); found {
+			next = idx + 1
+		}
+	}
+	if next < 1 {
+		next = 1
+	}
+	if next >= n.nextIndex[m.From] {
+		// Never move forward on a rejection. A stale reject arriving after a
+		// success would otherwise undo the repair and loop forever.
+		return
+	}
+	n.nextIndex[m.From] = next
+	n.sendAppend(m.From)
+}
+
+// maybeCommit advances the commit index to the largest N such that a majority
+// has matchIndex >= N, and log[N].Term == currentTerm.
+//
+// That last clause is the Figure 8 condition and it is not optional. Without
+// it, a leader can commit an entry from a PREVIOUS term that a later leader
+// then overwrites — the one safety violation the paper devotes a full figure
+// to. Entries from earlier terms commit indirectly, carried along once a
+// current-term entry commits.
+func (n *Node) maybeCommit() bool {
+	// Collect over n.peers (a slice) rather than ranging the matchIndex map:
+	// map iteration order is randomised, and while sorting would erase the
+	// difference here, ranging maps for anything order-sensitive is the habit
+	// that breaks determinism elsewhere.
+	matches := make([]Index, 0, len(n.peers)+1)
+	matches = append(matches, n.matchIndex[n.id])
+	for _, p := range n.peers {
+		matches = append(matches, n.matchIndex[p])
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i] > matches[j] })
+
+	// The quorum-th largest is the highest index a majority has reached.
+	candidate := matches[n.quorum()-1]
+	if candidate <= n.log.committed {
+		return false
+	}
+	if term, ok := n.log.term(candidate); !ok || term != n.currentTerm {
+		return false
+	}
+
+	n.log.commitTo(candidate)
+	// Followers learn of the new commit index on the next AppendEntries.
+	n.bcastAppend()
+	return true
 }
 
 func (n *Node) handleInstallSnapshot(m Message)     {} // milestone 5

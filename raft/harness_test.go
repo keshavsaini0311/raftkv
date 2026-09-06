@@ -25,6 +25,11 @@ type network struct {
 	// dropVotes silently discards RequestVote traffic, used to force a term
 	// to pass without a leader being elected.
 	dropVotes bool
+
+	// applied records what each node's state machine consumed, in order. The
+	// State Machine Safety property says these must be identical prefixes
+	// across every node, and test 14 checks exactly that.
+	applied map[NodeID][]Entry
 }
 
 // newNetwork builds n nodes with STAGGERED election timeouts: node i draws
@@ -37,6 +42,7 @@ func newNetwork(t *testing.T, ids ...NodeID) *network {
 		ids:      ids,
 		nodes:    make(map[NodeID]*Node, len(ids)),
 		isolated: make(map[NodeID]bool),
+		applied:  make(map[NodeID][]Entry, len(ids)),
 	}
 	for i, id := range ids {
 		peers := make([]NodeID, 0, len(ids)-1)
@@ -97,18 +103,30 @@ func (nw *network) tickOne(id NodeID, n int) {
 // repeating until the cluster falls silent.
 func (nw *network) deliver() {
 	nw.t.Helper()
-	const maxRounds = 100
+	const maxRounds = 200
 	for round := 0; round < maxRounds; round++ {
 		var inFlight []Message
+		progressed := false
+
 		for _, id := range nw.ids {
 			n := nw.nodes[id]
 			rd := n.Ready()
+			if !rd.IsEmpty() {
+				progressed = true
+			}
 			if !nw.isolated[id] {
 				inFlight = append(inFlight, rd.Messages...)
 			}
+			// Record what the state machine consumed, in the order it was
+			// handed over. This is the driver's apply step.
+			nw.applied[id] = append(nw.applied[id], rd.CommittedEntries...)
 			n.Advance(rd)
 		}
-		if len(inFlight) == 0 {
+
+		// Stop only when nothing moved AND nothing is in flight. Stopping at
+		// "no messages" alone would miss entries that became committed but
+		// have not yet been surfaced for applying.
+		if !progressed && len(inFlight) == 0 {
 			return
 		}
 		for _, m := range inFlight {

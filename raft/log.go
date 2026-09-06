@@ -19,8 +19,43 @@ type raftLog struct {
 	committed Index
 	applied   Index
 
+	// stable is the highest index the driver has reported persisted. Entries
+	// past it are "unstable": they exist in memory and must be handed to the
+	// driver through Ready before any message that depends on them is sent.
+	stable Index
+
 	// snapshot is retained until the driver reports it persisted.
 	snapshot *Snapshot
+}
+
+// unstable returns entries appended but not yet persisted by the driver.
+func (l *raftLog) unstable() []Entry {
+	if l.stable >= l.lastIndex() {
+		return nil
+	}
+	return l.slice(l.stable + 1)
+}
+
+// stableTo records that the driver persisted through index i.
+func (l *raftLog) stableTo(i Index) {
+	if i > l.stable && i <= l.lastIndex() {
+		l.stable = i
+	}
+}
+
+// lastIndexOfTerm returns the highest index whose entry has the given term.
+// Used by the leader to skip an entire conflicting term in one round trip
+// instead of walking nextIndex back one entry at a time.
+func (l *raftLog) lastIndexOfTerm(t Term) (Index, bool) {
+	for i := len(l.entries) - 1; i >= 0; i-- {
+		if l.entries[i].Term == t {
+			return l.entries[i].Index, true
+		}
+		if l.entries[i].Term < t {
+			break // terms are non-decreasing along the log
+		}
+	}
+	return 0, false
 }
 
 func newLog() *raftLog {
