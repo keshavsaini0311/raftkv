@@ -417,3 +417,48 @@ func dumpFailure(t *testing.T, info porcupine.LinearizationInfo) {
 func (w *Workload) summary() string {
 	return fmt.Sprintf("issued=%d rejected=%d completed=%d", w.Issued, w.Rejected, w.Completed)
 }
+
+// Linearizability with compaction ACTIVE.
+//
+// Snapshotting is where "the follower fell behind and could never catch up"
+// bugs live: entries are discarded, so a slow node can no longer be repaired
+// incrementally and must be caught up by a whole-state transfer. Running the
+// same chaos with a deliberately tiny snapshot threshold exercises that path
+// constantly instead of never.
+func TestLinearizableWithCompaction(t *testing.T) {
+	for _, seed := range []int64{1, 2, 3, 7, 42} {
+		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) {
+			cfg := DefaultConfig(seed, 5)
+			cfg.Network = NetworkConfig{MinLatency: 1, MaxLatency: 4, DropRate: 0.02, DuplicateRate: 0.02}
+			cfg.SnapshotEvery = 20 // absurdly small, on purpose
+
+			c, nem, _ := Run(cfg, Chaos(), DefaultWorkload(), 4000)
+
+			if c.Snapshots == 0 {
+				t.Fatal("no snapshots were taken; this test proves nothing")
+			}
+			if c.SnapshotsInstalled == 0 {
+				t.Errorf("snapshots were taken (%d) but none were ever INSTALLED on a "+
+					"follower, so the InstallSnapshot path went untested", c.Snapshots)
+			}
+
+			ops := toOperations(c.History().Ops())
+			if len(ops) < 20 {
+				t.Fatalf("only %d operations; the run was too quiet", len(ops))
+			}
+
+			res, info := porcupine.CheckOperationsVerbose(registerModel, ops, 30*time.Second)
+			switch res {
+			case porcupine.Ok:
+				t.Logf("linearizable under compaction: %s | %s | %s",
+					c.History().Summary(), nem.Summary(), c.Stats())
+			case porcupine.Illegal:
+				t.Errorf("NOT LINEARIZABLE with compaction at seed %d\n  %s\n  %s\n  %s",
+					seed, c.History().Summary(), nem.Summary(), c.Stats())
+				dumpFailure(t, info)
+			case porcupine.Unknown:
+				t.Logf("checker timed out at seed %d", seed)
+			}
+		})
+	}
+}

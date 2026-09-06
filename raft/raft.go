@@ -23,6 +23,13 @@ var (
 	// ErrNotLeader is returned by Propose on a node that is not the leader.
 	ErrNotLeader = errors.New("raft: not the leader")
 
+	// ErrSnapshotAhead means the requested snapshot index is past what the
+	// state machine has applied.
+	ErrSnapshotAhead = errors.New("raft: snapshot index is ahead of applied")
+
+	// ErrSnapshotCompacted means the requested index is already compacted.
+	ErrSnapshotCompacted = errors.New("raft: snapshot index already compacted")
+
 	// ErrReadIndexUnavailable means the leader has not yet committed an entry
 	// in its own term, so it cannot trust its commit index. Transient: the
 	// no-op appended on election resolves it within a round trip.
@@ -83,6 +90,11 @@ type Node struct {
 	ackedReadSeq map[NodeID]uint64
 	pendingReads []pendingRead
 	readStates   []ReadState
+
+	// pendingSnapshot is a snapshot received from the leader, waiting to be
+	// surfaced through Ready so the driver can persist it and hand it to the
+	// state machine.
+	pendingSnapshot *Snapshot
 
 	msgs          []Message
 	prevHardState HardState
@@ -254,6 +266,7 @@ func respTypeFor(t MessageType) MessageType {
 // messages that were never sent.
 func (n *Node) Ready() Ready {
 	rd := Ready{
+		Snapshot:         n.pendingSnapshot,
 		Entries:          n.log.unstable(),
 		Messages:         n.msgs,
 		CommittedEntries: n.log.nextApplicable(),
@@ -277,6 +290,10 @@ func (n *Node) Ready() Ready {
 func (n *Node) Advance(r Ready) {
 	if r.HardState != nil {
 		n.prevHardState = *r.HardState
+	}
+	if !r.Snapshot.IsEmpty() && n.pendingSnapshot != nil &&
+		r.Snapshot.Metadata.Index == n.pendingSnapshot.Metadata.Index {
+		n.pendingSnapshot = nil
 	}
 	if len(r.Entries) > 0 {
 		// The driver has fsynced these. Only now may the leader count them
@@ -484,6 +501,18 @@ func (n *Node) maybeReleaseReads() {
 	n.pendingReads = kept
 }
 
+// sendSnapshot ships the current snapshot to a follower that has fallen behind
+// the compaction point.
+func (n *Node) sendSnapshot(to NodeID) {
+	if n.log.snapshot == nil {
+		return // nothing to send; the follower retries and we catch up later
+	}
+	n.send(Message{Type: MsgInstallSnapshot, To: to, Snapshot: n.log.snapshot})
+	// Optimistically assume it lands. A loss or a stale response simply walks
+	// nextIndex back again on the next round.
+	n.nextIndex[to] = n.log.snapshot.Metadata.Index + 1
+}
+
 // bcastAppend sends each peer whatever it is missing. A caught-up peer gets
 // zero entries, which is exactly a heartbeat — so replication and heartbeating
 // are one code path rather than two that can disagree.
@@ -504,12 +533,10 @@ func (n *Node) sendAppend(to NodeID) {
 	prevIndex := next - 1
 	prevTerm, ok := n.log.term(prevIndex)
 	if !ok {
-		// The entries this follower needs have been compacted into a
-		// snapshot. Milestone 5 sends InstallSnapshot here; until then, fall
-		// back to the start of what we still hold.
-		next = n.log.firstIndex()
-		prevIndex = next - 1
-		prevTerm, _ = n.log.term(prevIndex)
+		// The entries this follower needs have been compacted away, so no
+		// incremental repair is possible. Send the whole snapshot instead.
+		n.sendSnapshot(to)
+		return
 	}
 
 	n.send(Message{
@@ -676,8 +703,117 @@ func (n *Node) maybeCommit() bool {
 	return true
 }
 
-func (n *Node) handleInstallSnapshot(m Message)     {} // milestone 5
-func (n *Node) handleInstallSnapshotResp(m Message) {} // milestone 5
+// handleInstallSnapshot accepts a snapshot from the leader.
+//
+// A snapshot arrives when the leader has already compacted away the entries
+// this follower needs, so incremental repair is impossible. The snapshot is
+// authoritative: it came from a leader whose log by definition contains every
+// committed entry, so the follower discards its own log entirely rather than
+// trying to reconcile. Local entries past the snapshot were uncommitted.
+func (n *Node) handleInstallSnapshot(m Message) {
+	// Step guarantees m.Term == n.currentTerm, so this is a real leader.
+	n.becomeFollower(m.Term, m.From)
+
+	if m.Snapshot == nil {
+		n.send(Message{Type: MsgInstallSnapshotResp, To: m.From, MatchIndex: n.log.lastIndex()})
+		return
+	}
+
+	// Already covered. A stale or duplicated InstallSnapshot must not roll the
+	// log backwards — that would un-commit entries, and commitment is final.
+	if m.Snapshot.Metadata.Index <= n.log.committed {
+		n.send(Message{Type: MsgInstallSnapshotResp, To: m.From, MatchIndex: n.log.lastIndex()})
+		return
+	}
+
+	// If we happen to hold a matching entry at the snapshot's boundary, our log
+	// agrees with the leader up to that point and only needs compacting — no
+	// need to throw away entries we can keep.
+	if n.log.matches(m.Snapshot.Metadata.Index, m.Snapshot.Metadata.Term) {
+		n.log.compact(m.Snapshot.Metadata.Index, m.Snapshot.Metadata.Term)
+		n.log.commitTo(m.Snapshot.Metadata.Index)
+	} else {
+		n.log.restore(m.Snapshot)
+	}
+
+	n.pendingSnapshot = m.Snapshot
+	if len(m.Snapshot.Metadata.Voters) > 0 {
+		n.applyVoters(m.Snapshot.Metadata.Voters)
+	}
+
+	n.send(Message{Type: MsgInstallSnapshotResp, To: m.From, MatchIndex: n.log.lastIndex()})
+}
+
+func (n *Node) handleInstallSnapshotResp(m Message) {
+	if n.role != Leader {
+		return
+	}
+	if m.MatchIndex > n.matchIndex[m.From] {
+		n.matchIndex[m.From] = m.MatchIndex
+		n.nextIndex[m.From] = m.MatchIndex + 1
+	}
+	n.maybeCommit()
+}
+
+// CreateSnapshot compacts the log up to index, which the driver has just
+// snapshotted from the state machine.
+//
+// index must be <= applied: snapshotting past what the state machine has
+// consumed would produce a snapshot of a state that never existed.
+func (n *Node) CreateSnapshot(index Index, data []byte) (*Snapshot, error) {
+	if index > n.log.applied {
+		return nil, ErrSnapshotAhead
+	}
+	term, ok := n.log.term(index)
+	if !ok {
+		return nil, ErrSnapshotCompacted
+	}
+
+	voters := make([]NodeID, 0, len(n.peers)+1)
+	voters = append(voters, n.id)
+	voters = append(voters, n.peers...)
+
+	snap := &Snapshot{
+		Metadata: SnapshotMetadata{Index: index, Term: term, Voters: voters},
+		Data:     data,
+	}
+	n.log.compact(index, term)
+	n.log.snapshot = snap
+	return snap, nil
+}
+
+// AppliedIndex is the highest index the state machine has consumed, which is
+// the highest index a snapshot may cover.
+func (n *Node) AppliedIndex() Index { return n.log.applied }
+
+// FirstIndex is the oldest entry still in the log; everything below it lives in
+// a snapshot.
+func (n *Node) FirstIndex() Index { return n.log.firstIndex() }
+
+// LastIndex is the newest entry in the log.
+func (n *Node) LastIndex() Index { return n.log.lastIndex() }
+
+// applyVoters replaces the peer set, excluding ourselves.
+func (n *Node) applyVoters(voters []NodeID) {
+	peers := make([]NodeID, 0, len(voters))
+	for _, v := range voters {
+		if v != n.id {
+			peers = append(peers, v)
+		}
+	}
+	sortNodeIDs(peers)
+	n.peers = peers
+}
+
+// sortNodeIDs keeps peer order deterministic. Insertion sort: the slice is
+// tiny, and avoiding the sort package keeps one fewer import in the core.
+func sortNodeIDs(ids []NodeID) {
+	for i := 1; i < len(ids); i++ {
+		for j := i; j > 0 && ids[j] < ids[j-1]; j-- {
+			ids[j], ids[j-1] = ids[j-1], ids[j]
+		}
+	}
+}
 
 // =============================================================================
 // Helpers

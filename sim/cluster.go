@@ -16,6 +16,14 @@ type Config struct {
 	Seed    int64
 	Nodes   int
 	Network NetworkConfig
+
+	// SnapshotEvery compacts the log once this many entries have accumulated
+	// past the last snapshot. Zero disables compaction.
+	//
+	// Small values are deliberate here. Real deployments snapshot every few
+	// thousand entries, which in a test means never — and untested compaction
+	// is where "the follower fell behind and could not catch up" bugs live.
+	SnapshotEvery int
 }
 
 func DefaultConfig(seed int64, nodes int) Config {
@@ -82,6 +90,11 @@ type Cluster struct {
 	// ReadTooEarly counts reads released before the state machine caught up to
 	// their read index. Must be zero in a correct driver.
 	ReadTooEarly int
+
+	// Snapshots and SnapshotsInstalled count compaction activity, so a run that
+	// never compacted cannot pass as one that did.
+	Snapshots          int
+	SnapshotsInstalled int
 
 	// ProposalsLost counts writes whose entry was truncated by a new leader.
 	// Expected to be non-zero under chaos: it is a normal Raft outcome, and
@@ -238,7 +251,42 @@ func (c *Cluster) handleReady(n *simNode) {
 		c.history.Return(op, kv.Result{Value: v, Found: found}, c.now)
 	}
 
+	if !rd.Snapshot.IsEmpty() {
+		c.SnapshotsInstalled++
+	}
+
 	n.node.Advance(rd)
+	c.maybeSnapshot(n)
+}
+
+// maybeSnapshot compacts the log once it has grown past the threshold.
+//
+// The snapshot is taken from the STATE MACHINE, not from the log: it is the
+// result of applying entries, which is exactly what makes the entries
+// discardable. Snapshotting at applied (never past it) means the snapshot
+// always describes a state that actually existed.
+func (c *Cluster) maybeSnapshot(n *simNode) {
+	if c.cfg.SnapshotEvery <= 0 {
+		return
+	}
+	applied := n.node.AppliedIndex()
+	if applied < n.node.FirstIndex() {
+		return
+	}
+	if int(applied-n.node.FirstIndex()) < c.cfg.SnapshotEvery {
+		return
+	}
+
+	data, err := n.kv.Snapshot()
+	if err != nil {
+		return
+	}
+	snap, err := n.node.CreateSnapshot(applied, data)
+	if err != nil {
+		return
+	}
+	_ = n.store.SaveSnapshot(snap)
+	c.Snapshots++
 }
 
 // Leader returns the current leader, or 0 if there is none.
@@ -373,9 +421,10 @@ func (c *Cluster) Applied(id raft.NodeID) []raft.Entry { return c.nodes[id].appl
 
 // Stats reports network counters.
 func (c *Cluster) Stats() string {
-	return fmt.Sprintf("sent=%d delivered=%d dropped=%d partitioned=%d duplicated=%d inflight=%d",
+	return fmt.Sprintf("sent=%d delivered=%d dropped=%d partitioned=%d duplicated=%d inflight=%d snapshots=%d installed=%d",
 		c.net.sent, c.net.delivered, c.net.dropped,
-		c.net.partitionDropped, c.net.duplicated, c.net.inFlightCount())
+		c.net.partitionDropped, c.net.duplicated, c.net.inFlightCount(),
+		c.Snapshots, c.SnapshotsInstalled)
 }
 
 // Partition splits the cluster into groups that cannot talk to each other.
