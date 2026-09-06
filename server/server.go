@@ -67,6 +67,12 @@ func (c *Config) setDefaults() {
 	}
 }
 
+// waiter is a client write bound to a specific (term, index).
+type waiter struct {
+	prop proposal
+	term raft.Term
+}
+
 // proposal is a client write waiting for its entry to commit and apply.
 type proposal struct {
 	data   []byte
@@ -96,7 +102,18 @@ type Server struct {
 
 	// waiters maps a log index to the client blocked on it. Touched only by
 	// run(), so it needs no lock.
-	waiters map[raft.Index]proposal
+	//
+	// The TERM is stored alongside, and it is load-bearing. An index alone does
+	// not identify a proposal: if this node is deposed before the entry
+	// commits, a new leader can place a DIFFERENT entry at the same index. On
+	// index alone we would hand the client another write's result and report
+	// success for a write that was truncated away — an acknowledged write that
+	// never happened.
+	//
+	// Found by the deterministic simulator, which hit exactly this case under
+	// combined partitions and crashes at seed 2. It is invisible without
+	// faults, which is why no amount of manual testing surfaced it.
+	waiters map[raft.Index]waiter
 
 	// pendingReads are reads whose ReadIndex has been registered, keyed by the
 	// context token echoed back through ReadState.
@@ -147,7 +164,7 @@ func New(cfg Config) (*Server, error) {
 		propC:        make(chan proposal),
 		readC:        make(chan readReq),
 		recvC:        make(chan raft.Message, 1024),
-		waiters:      make(map[raft.Index]proposal),
+		waiters:      make(map[raft.Index]waiter),
 		pendingReads: make(map[uint64]readReq),
 		stop:         make(chan struct{}),
 		done:         make(chan struct{}),
@@ -238,7 +255,9 @@ func (s *Server) run(ctx context.Context) {
 				p.err <- err
 				continue
 			}
-			s.waiters[idx] = p
+			// s.node.Term(), not the cached status: updateStatus runs later
+			// in the loop, so the cache can still hold the previous term.
+			s.waiters[idx] = waiter{prop: p, term: s.node.Term()}
 
 		case r := <-s.readC:
 			s.readToken++
@@ -300,8 +319,15 @@ func (s *Server) handleReady() {
 		}
 		res := s.kv.Apply(e.Data)
 		if w, ok := s.waiters[e.Index]; ok {
-			w.result <- res
 			delete(s.waiters, e.Index)
+			if w.term == e.Term {
+				w.prop.result <- res
+			} else {
+				// A different leader's entry landed here, so our proposal was
+				// truncated. Report failure: the client must retry rather than
+				// believe a write that never happened.
+				w.prop.err <- ErrNotLeader
+			}
 		}
 	}
 
@@ -341,7 +367,7 @@ func (s *Server) updateStatus(rd raft.Ready) {
 
 func (s *Server) failAllWaiters(err error) {
 	for idx, w := range s.waiters {
-		w.err <- err
+		w.prop.err <- err
 		delete(s.waiters, idx)
 	}
 	for token, r := range s.pendingReads {
